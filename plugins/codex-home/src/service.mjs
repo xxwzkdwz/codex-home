@@ -3,12 +3,21 @@ import { MqttTransport, HomeError } from './transport.mjs';
 
 const normalize = text => text.toLocaleLowerCase('en-US').replace(/\s/g, '');
 function publicDevice(d) {
-  return { device_id: d.device_id, room_id: d.room_id, name: d.name, aliases: d.aliases, kind: d.kind, capabilities: d.capabilities };
+  return { device_id: d.device_id, room_id: d.room_id, name: d.name, aliases: d.aliases, kind: d.kind, capabilities: d.capabilities,
+    state_confirmation: d.state_confirmation ?? 'unverified' };
 }
 export function resolveDevice(config, ref) {
   if (typeof ref !== 'string' || !ref.trim() || ref.length > 80) throw new ConfigError('DEVICE_NOT_FOUND', '请提供有效的设备名称或 ID。');
   const wanted = normalize(ref);
-  const matches = config.devices.filter(d => d.enabled && [d.device_id, d.name, ...d.aliases].some(s => normalize(s) === wanted));
+  // IDs are unique in the schema and remain usable even when another lamp's
+  // human-readable name/alias collides with one. A disabled ID must not fall
+  // through to an enabled lamp's alias and accidentally select that lamp.
+  const byId = config.devices.find(d => normalize(d.device_id) === wanted);
+  if (byId) {
+    if (!byId.enabled) throw new ConfigError('DEVICE_NOT_FOUND', '未找到已启用的设备；请先列出设备。');
+    return byId;
+  }
+  const matches = config.devices.filter(d => d.enabled && [d.name, ...d.aliases].some(s => normalize(s) === wanted));
   if (!matches.length) throw new ConfigError('DEVICE_NOT_FOUND', '未找到已启用的设备；请先列出设备。');
   if (matches.length !== 1) throw new ConfigError('DEVICE_AMBIGUOUS', '名称对应多个设备；请使用准确的 device_id。');
   return matches[0];
@@ -31,6 +40,9 @@ export class HomeService {
     const config = await this.loader(this.configPath);
     if (options.signal?.aborted) throw new HomeError('REQUEST_CANCELLED', '请求已取消，未发送控制。');
     const device = resolveDevice(config, ref);
+    if (state && device.state_confirmation !== 'correlated_read') {
+      throw new HomeError('STATE_CONFIRMATION_REQUIRED', '尚未配置该灯的关联设备读取；保持只读，请按 setup 准备并检查后再启用控制。');
+    }
     const key = `${config.mqtt.url}|${config.mqtt.base_topic}|${device.mqtt_topic}`;
     if (state && this.uncertain.has(key)) throw new HomeError('STATUS_REQUIRED', '上次控制结果不确定；请先读取新鲜状态，再按用户意图决定，不自动重放。', { outcome: 'unknown' });
     // Reject, do not queue: a delayed physical action can outlive the user's immediate intent.
@@ -38,7 +50,12 @@ export class HomeService {
     this.pending.set(key, true);
     try {
       const result = state ? await this.transport.setState(config, device, state, options) : await this.transport.status(config, device, options);
-      if (!state) this.uncertain.delete(key);
+      // A new MQTT envelope can still contain an old cached state. Unverified
+      // observations must never unlock an earlier unknown physical outcome.
+      if (!state && device.state_confirmation === 'correlated_read' && result.state_freshness_verified === true &&
+          result.confirmation === 'correlated_device_read' && result.request_outcome === 'confirmed') {
+        this.uncertain.delete(key);
+      }
       return { ...publicDevice(device), ...result };
     } catch (error) {
       if (state && (!(error instanceof HomeError) || error.outcome === 'unknown')) {

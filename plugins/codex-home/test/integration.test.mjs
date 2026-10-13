@@ -107,24 +107,38 @@ async function fixture(t, executable) {
   });
   fake.on('error', error => { fakeError = error; });
   await fake.subscribeAsync([`${base}/${topic}/set`, `${base}/${topic}/get`], { qos: 0 });
-  fake.on('message', (receivedTopic, payload) => {
+  fake.on('message', (receivedTopic, payload, packet) => {
     const action = receivedTopic.endsWith('/set') ? 'set' : 'get';
     const body = JSON.parse(payload.toString());
-    commandLog.push({ action, body });
-    if (action === 'set') {
+    commandLog.push({ action, body, qos: packet.qos, retain: packet.retain });
+    // Correlated reads also use /set, but never change this synthetic lamp.
+    // The fake never connects to a real device or another broker.
+    if (body.read) {
+      if (mode === 'silent') return;
+      if (mode === 'ordinary-only') {
+        fake.publish(`${base}/${topic}`, JSON.stringify({ state: currentState }), { qos: 0, retain: false });
+        return;
+      }
+      const property = mode === 'stale-nonce' ? `codex_home_read_${'0'.repeat(32)}` : body.read.state_property;
+      const value = currentState === 'ON' ? 1 : 0;
+      const onOff = mode === 'mismatch' ? 1 - value : mode === 'boolean' ? Boolean(value) : value;
+      fake.publish(`${base}/${topic}`, JSON.stringify({ [property]: { onOff }, state: currentState }), { qos: 0, retain: false });
+      return;
+    }
+    if (action === 'set' && Object.hasOwn(body, 'state')) {
       currentState = body.state;
       if (mode === 'silent') return;
     }
-    // The fake only reports state. It never connects to hardware or another broker.
     fake.publish(`${base}/${topic}`, JSON.stringify({ state: currentState }), { qos: 0, retain: false });
   });
 
   const configPath = path.join(directory, 'config.json');
-  await fs.writeFile(configPath, JSON.stringify({
+  const config = {
     version: 1,
     mqtt: { url, base_topic: base, timeout_ms: 1000 },
-    devices: [{ device_id: 'test-lamp', room_id: 'test-room', name: 'Integration test lamp', mqtt_topic: topic, kind: 'light', require_availability: true }],
-  }), { mode: 0o600 });
+    devices: [{ device_id: 'test-lamp', room_id: 'test-room', name: 'Integration test lamp', mqtt_topic: topic, kind: 'light', require_availability: true, state_confirmation: 'correlated_read' }],
+  };
+  await fs.writeFile(configPath, JSON.stringify(config), { mode: 0o600 });
   if (process.platform !== 'win32') assert.equal((await fs.stat(configPath)).mode & 0o777, 0o600);
 
   transport = new StdioClientTransport({
@@ -143,11 +157,16 @@ async function fixture(t, executable) {
   };
   const call = (name, args = {}, options = {}) => mcp.callTool({ name, arguments: args }, undefined, { timeout: 4000, ...options });
   const data = response => response.structuredContent ?? JSON.parse(response.content.find(item => item.type === 'text').text);
-  const sets = () => commandLog.filter(item => item.action === 'set').length;
+  const sets = () => commandLog.filter(item => item.action === 'set' && Object.hasOwn(item.body, 'state')).length;
   const subscriptionCount = () => (logs.match(/Received SUBSCRIBE from/g) || []).length;
   await online();
   return { mcp, call, data, publish, online, sets, commandLog, subscriptionCount,
     mode: value => { mode = value; },
+    confirmation: async value => {
+      if (value === undefined) delete config.devices[0].state_confirmation;
+      else config.devices[0].state_confirmation = value;
+      await fs.writeFile(configPath, JSON.stringify(config), { mode: 0o600 });
+    },
     assertHealthy: () => { assert.equal(fakeError, undefined); assert.equal(serverStderr, ''); },
   };
 }
@@ -163,7 +182,7 @@ test('isolated Mosquitto + fake Zigbee2MQTT + MCP stdio integration', { timeout:
 
   await t.test('initialize, tool annotations, and safe device listing', async () => {
     assert.equal(f.mcp.getServerVersion().name, 'codex-home');
-    assert.equal(f.mcp.getServerVersion().version, '0.1.1');
+    assert.equal(f.mcp.getServerVersion().version, '0.1.2');
     const { tools } = await f.mcp.listTools();
     assert.deepEqual(tools.map(tool => tool.name).sort(), ['home_health', 'home_list_devices', 'home_set_state', 'home_status']);
     for (const tool of tools) assert.equal(tool.annotations.readOnlyHint, tool.name !== 'home_set_state');
@@ -174,15 +193,32 @@ test('isolated Mosquitto + fake Zigbee2MQTT + MCP stdio integration', { timeout:
     assert.doesNotMatch(JSON.stringify(listed), /mqtt_topic|mqtt:\/\/|light-not-a-real-device/);
   });
 
-  await t.test('real MQTT fresh report closes set and status loops', async () => {
+  await t.test('one state write and one nonce-correlated device read confirm control', async () => {
     assert.equal(f.data(await f.call('home_health')).bridge_state, 'online');
+    const before = f.commandLog.length;
     const result = f.data(await f.call('home_set_state', args('ON')));
     assert.equal(result.state, 'ON');
     assert.equal(result.request_outcome, 'confirmed');
-    assert.equal(result.confirmation, 'fresh_gateway_report');
+    assert.equal(result.confirmation, 'correlated_device_read');
+    assert.equal(result.state_freshness_verified, true);
+    const commands = f.commandLog.slice(before);
+    assert.equal(commands.length, 2);
+    assert.deepEqual(commands[0].body, { state: 'ON' });
+    assert.deepEqual(Object.keys(commands[1].body), ['read']);
+    assert.equal(commands[1].body.read.cluster, 'genOnOff');
+    assert.deepEqual(commands[1].body.read.attributes, ['onOff']);
+    assert.match(commands[1].body.read.state_property, /^codex_home_read_[a-f0-9]{32}$/);
+    for (const command of commands) {
+      assert.equal(command.action, 'set');
+      assert.equal(command.qos, 0);
+      assert.equal(command.retain, false);
+    }
     const status = f.data(await f.call('home_status', { device_ref: 'test-lamp' }));
     assert.equal(status.state, 'ON');
-    assert.equal(status.confirmation, 'fresh_gateway_report');
+    assert.equal(status.confirmation, 'correlated_device_read');
+    assert.equal(status.state_freshness_verified, true);
+    assert.equal(status.request_outcome, 'confirmed');
+    assert.notEqual(f.commandLog.at(-1).body.read.state_property, commands[1].body.read.state_property);
   });
 
   await t.test('retained old ON cannot confirm write; unknown latches until fresh status', async () => {
@@ -197,8 +233,54 @@ test('isolated Mosquitto + fake Zigbee2MQTT + MCP stdio integration', { timeout:
     const blocked = f.data(await f.call('home_set_state', args('OFF')));
     assert.equal(blocked.error.code, 'STATUS_REQUIRED');
     assert.equal(f.sets(), before + 1);
-    assert.equal(f.data(await f.call('home_status', { device_ref: 'test-lamp' })).state, 'ON');
     f.mode('reply');
+    assert.equal(f.data(await f.call('home_status', { device_ref: 'test-lamp' })).state, 'ON');
+    assert.equal(f.data(await f.call('home_set_state', args('OFF'))).request_outcome, 'confirmed');
+  });
+
+  await t.test('ordinary non-retained state and old nonce never confirm or unlock a write', async () => {
+    f.mode('ordinary-only');
+    const before = f.sets();
+    const timedOut = f.data(await f.call('home_set_state', args('ON')));
+    assert.equal(timedOut.error.code, 'MQTT_TIMEOUT');
+    assert.equal(timedOut.request_outcome, 'unknown');
+    assert.equal(f.sets(), before + 1);
+    for (const mode of ['ordinary-only', 'stale-nonce']) {
+      f.mode(mode);
+      const status = f.data(await f.call('home_status', { device_ref: 'test-lamp' }));
+      assert.equal(status.error.code, 'MQTT_TIMEOUT');
+      const blocked = f.data(await f.call('home_set_state', args('OFF')));
+      assert.equal(blocked.error.code, 'STATUS_REQUIRED');
+      assert.equal(f.sets(), before + 1);
+    }
+    f.mode('reply');
+    await f.confirmation(undefined);
+    const observation = f.data(await f.call('home_status', { device_ref: 'test-lamp' }));
+    assert.equal(observation.state, 'ON');
+    assert.equal(observation.confirmation, 'unverified_gateway_report');
+    assert.equal(observation.state_freshness_verified, false);
+    assert.equal(observation.request_outcome, 'unverified');
+    await f.confirmation('correlated_read');
+    assert.equal(f.data(await f.call('home_set_state', args('OFF'))).error.code, 'STATUS_REQUIRED');
+    assert.equal(f.sets(), before + 1);
+    f.mode('boolean');
+    const recovered = f.data(await f.call('home_status', { device_ref: 'test-lamp' }));
+    assert.equal(recovered.state, 'ON');
+    assert.equal(recovered.confirmation, 'correlated_device_read');
+    f.mode('reply');
+    assert.equal(f.data(await f.call('home_set_state', args('OFF'))).request_outcome, 'confirmed');
+  });
+
+  await t.test('correlated read differing from requested state returns unknown without retry', async () => {
+    f.mode('mismatch');
+    const before = f.sets();
+    const result = f.data(await f.call('home_set_state', args('ON')));
+    assert.equal(result.error.code, 'STATE_MISMATCH');
+    assert.equal(result.request_outcome, 'unknown');
+    assert.equal(f.sets(), before + 1);
+    assert.equal(f.data(await f.call('home_set_state', args('OFF'))).error.code, 'STATUS_REQUIRED');
+    f.mode('reply');
+    assert.equal(f.data(await f.call('home_status', { device_ref: 'test-lamp' })).state, 'ON');
     assert.equal(f.data(await f.call('home_set_state', args('OFF'))).request_outcome, 'confirmed');
   });
 
@@ -258,8 +340,8 @@ test('isolated Mosquitto + fake Zigbee2MQTT + MCP stdio integration', { timeout:
     assert.equal(blocked.error.code, 'STATUS_REQUIRED');
     assert.equal(blocked.request_outcome, 'unknown');
     assert.equal(f.sets(), before + 1);
-    assert.equal(f.data(await f.call('home_status', { device_ref: 'test-lamp' })).state, 'ON');
     f.mode('reply');
+    assert.equal(f.data(await f.call('home_status', { device_ref: 'test-lamp' })).state, 'ON');
     assert.equal(f.data(await f.call('home_set_state', args('OFF'))).request_outcome, 'confirmed');
   });
   f.assertHealthy();

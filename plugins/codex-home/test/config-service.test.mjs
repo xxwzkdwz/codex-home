@@ -3,18 +3,23 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { parseConfig, createConfig, loadConfig, ConfigError } from '../src/config.mjs';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { parseConfig, createConfig, loadConfig, readPrivateFile, MAX_CONFIG_BYTES, ConfigError } from '../src/config.mjs';
 import { HomeService, resolveDevice, safeError } from '../src/service.mjs';
 import { HomeError } from '../src/transport.mjs';
 
-const lamp = { device_id: 'light.demo', room_id: 'demo_room', name: 'Demo light', aliases: ['demo'], kind: 'light', mqtt_topic: 'demo-light' };
+const lamp = { device_id: 'light.demo', room_id: 'demo_room', name: 'Demo light', aliases: ['demo'], kind: 'light', mqtt_topic: 'demo-light', state_confirmation: 'correlated_read' };
 const make = (overrides = {}) => parseConfig({ version: 1, mqtt: {}, devices: [lamp], ...overrides });
 const fixture = async t => { const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-home-test-')); t.after(() => fs.rm(dir, { recursive: true, force: true })); return path.join(dir, 'config.json'); };
+const run = promisify(execFile);
 
 test('safe defaults, literal lights and unique IDs/topics', () => {
   const config = make();
   assert.equal(config.mqtt.url, 'mqtt://127.0.0.1:1883');
   assert.equal(config.devices[0].require_availability, true);
+  assert.equal(make({ devices: [{ ...lamp, state_confirmation: undefined }] }).devices[0].state_confirmation, 'unverified');
+  assert.throws(() => make({ devices: [{ ...lamp, state_confirmation: 'assume_verified' }] }), ConfigError);
   assert.equal(make({ mqtt: undefined }).mqtt.timeout_ms, 8000);
   for (const devices of [[{ ...lamp, kind: 'lock' }], [lamp, lamp], [{ ...lamp, mqtt_topic: 'bridge' }], [{ ...lamp, mqtt_topic: 'x/../set' }], [{ ...lamp, mqtt_topic: '+' }], [{ ...lamp, capabilities: ['brightness'] }]]) {
     assert.throws(() => make({ devices }), ConfigError);
@@ -40,11 +45,84 @@ test('private config created once, credentials are not returned in public list',
 test('unsafe permissions and oversized config rejected', async t => {
   const file = await fixture(t);
   await fs.writeFile(file, 'x'.repeat(70000), { mode: 0o600 });
-  await assert.rejects(loadConfig(file), { code: 'CONFIG_INVALID' });
+  await assert.rejects(loadConfig(file), { code: 'CONFIG_TOO_LARGE' });
   await fs.writeFile(file, JSON.stringify(make()));
   if (process.platform !== 'win32') {
     await fs.chmod(file, 0o644);
     await assert.rejects(loadConfig(file), { code: 'CONFIG_PERMISSIONS' });
+  }
+});
+
+test('expanded oversized configuration is rejected before creating any destination', async t => {
+  const file = path.join(path.dirname(await fixture(t)), 'not-created', 'config.json');
+  const devices = Array.from({ length: 256 }, (_, i) => ({ ...lamp, device_id: `light.demo${i}`, mqtt_topic: `demo${i}`, aliases: [] }));
+  const raw = { version: 1, devices };
+  assert.ok(Buffer.byteLength(JSON.stringify(raw)) < MAX_CONFIG_BYTES);
+  assert.ok(Buffer.byteLength(`${JSON.stringify(parseConfig(raw), null, 2)}\n`) > MAX_CONFIG_BYTES);
+  await assert.rejects(createConfig(file, raw), error => error.code === 'CONFIG_TOO_LARGE' && error.message.includes(String(MAX_CONFIG_BYTES)));
+  await assert.rejects(fs.stat(path.dirname(file)), { code: 'ENOENT' });
+});
+
+test('configuration size limit counts UTF-8 bytes rather than JavaScript characters', async t => {
+  const file = await fixture(t);
+  const data = make({ devices: Array.from({ length: 70 }, (_, i) => ({
+    ...lamp, device_id: `light.demo${i}`, mqtt_topic: `demo${i}`, name: '灯'.repeat(80), aliases: Array(3).fill('灯'.repeat(80)),
+  })) });
+  const serialized = `${JSON.stringify(data, null, 2)}\n`;
+  assert.ok(serialized.length < MAX_CONFIG_BYTES);
+  assert.ok(Buffer.byteLength(serialized) > MAX_CONFIG_BYTES);
+  await assert.rejects(createConfig(file, data), { code: 'CONFIG_TOO_LARGE' });
+  await assert.rejects(fs.stat(file), { code: 'ENOENT' });
+});
+
+test('exact-limit configuration remains readable and oversized input preserves it', async t => {
+  const file = await fixture(t);
+  const data = make({ devices: Array.from({ length: 180 }, (_, i) => ({
+    ...lamp, device_id: `light.demo${i}`, mqtt_topic: `demo${i}`, aliases: [],
+  })) });
+  let remaining = MAX_CONFIG_BYTES - Buffer.byteLength(`${JSON.stringify(data, null, 2)}\n`);
+  assert.ok(remaining > 0);
+  for (const device of data.devices) {
+    const added = Math.min(remaining, 80 - device.name.length);
+    device.name += 'x'.repeat(added);
+    remaining -= added;
+  }
+  assert.equal(remaining, 0);
+  await createConfig(file, data);
+  const original = await fs.readFile(file);
+  assert.equal(original.length, MAX_CONFIG_BYTES);
+  assert.equal((await loadConfig(file)).devices.length, data.devices.length);
+  data.devices.at(-1).name += 'x';
+  assert.equal(Buffer.byteLength(`${JSON.stringify(data, null, 2)}\n`), MAX_CONFIG_BYTES + 1);
+  await assert.rejects(createConfig(file, data), { code: 'CONFIG_TOO_LARGE' });
+  assert.deepEqual(await fs.readFile(file), original);
+});
+
+test('private-file reads accept the byte limit and reject one extra byte', async t => {
+  const file = await fixture(t);
+  await fs.writeFile(file, 'x'.repeat(MAX_CONFIG_BYTES), { mode: 0o600 });
+  assert.equal((await readPrivateFile(file)).length, MAX_CONFIG_BYTES);
+  await fs.appendFile(file, 'x');
+  await assert.rejects(readPrivateFile(file), { code: 'CONFIG_TOO_LARGE' });
+});
+
+test('FIFO configuration and credential paths fail without waiting for a writer', { skip: process.platform === 'win32' }, async t => {
+  const file = await fixture(t);
+  const fifo = path.join(path.dirname(file), 'credential.fifo');
+  await run('mkfifo', ['-m', '600', fifo]);
+  const moduleUrl = new URL('../src/config.mjs', import.meta.url).href;
+  const scenarios = [['readPrivateFile', fifo]];
+  for (const key of ['password_file', 'ca_file']) {
+    const config = path.join(path.dirname(file), `${key}.json`);
+    await createConfig(config, make({ mqtt: { [key]: 'credential.fifo' } }));
+    scenarios.push(['loadConfig', config]);
+  }
+  for (const [action, target] of scenarios) {
+    // A separate bounded process makes a blocking-open regression fail rather
+    // than leaving the test runner with a permanently blocked libuv worker.
+    const source = `import { ${action} } from ${JSON.stringify(moduleUrl)}; try { await ${action}(process.argv[1]); process.exitCode = 1; } catch (error) { console.log(error.code); if (error.code !== 'CONFIG_INVALID') process.exitCode = 1; }`;
+    const { stdout } = await run(process.execPath, ['--input-type=module', '-e', source, target], { timeout: 3000, killSignal: 'SIGKILL' });
+    assert.equal(stdout.trim(), 'CONFIG_INVALID');
   }
 });
 test('secrets supplied locally and fixed errors cannot disclose their values', async t => {
@@ -67,7 +145,7 @@ test('write values restricted and unknown outcomes latch until a fresh read', as
   let writes = 0;
   const service = new HomeService({ loader: async () => make(), transport: {
     setState: async () => { writes++; throw new HomeError('TIMEOUT', 'Timed out', { outcome: 'unknown' }); },
-    status: async () => ({ state: 'ON', confirmation: 'fresh_gateway_report' }),
+    status: async () => ({ state: 'ON', confirmation: 'correlated_device_read', state_freshness_verified: true, request_outcome: 'confirmed' }),
   } });
   assert.throws(() => service.setState('light.demo', 'TOGGLE'), { code: 'STATE_INVALID' });
   await assert.rejects(service.setState('light.demo', 'ON'), { outcome: 'unknown' });

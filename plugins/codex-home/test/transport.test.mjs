@@ -4,7 +4,7 @@ import { EventEmitter, getEventListeners } from 'node:events';
 import { HomeError, MqttTransport } from '../src/transport.mjs';
 
 const config = { mqtt: { url: 'mqtt://example.invalid', base_topic: 'zigbee2mqtt', timeout_ms: 50 }, devices: [] };
-const device = { device_id: 'lamp', mqtt_topic: 'lamp', require_availability: true };
+const device = { device_id: 'lamp', mqtt_topic: 'lamp', require_availability: true, state_confirmation: 'correlated_read' };
 
 class Client extends EventEmitter {
   publications = [];
@@ -33,6 +33,14 @@ class Client extends EventEmitter {
     this.message('zigbee2mqtt/lamp/availability', { state: available }, true);
     if (ack) this.ack();
   }
+  readProperty() {
+    return this.publications.find(p => p.payload.read)?.payload.read.state_property;
+  }
+  readReply(onOff, retain = false) {
+    const property = this.readProperty();
+    assert.match(property, /^codex_home_read_[0-9a-f]{32}$/);
+    this.message('zigbee2mqtt/lamp', { [property]: { onOff } }, retain);
+  }
 }
 
 function setup(settings = config) {
@@ -49,7 +57,7 @@ function assertClean(client) {
   assert.equal(client.listenerCount('error'), 1);
 }
 
-test('subscribes before publish, waits for ACK, sends one non-retained QoS 0 request', async () => {
+test('subscribes before publish, waits for ACK, sends one state command then one correlated read', async () => {
   const s = setup();
   const pending = s.transport.setState(s.settings, device, 'ON');
   s.client.ready({ ack: false });
@@ -57,9 +65,16 @@ test('subscribes before publish, waits for ACK, sends one non-retained QoS 0 req
   s.client.ack();
   assert.deepEqual(s.client.publications, [{ topic: 'zigbee2mqtt/lamp/set', payload: { state: 'ON' }, options: { qos: 0, retain: false } }]);
   s.client.message('zigbee2mqtt/lamp', { state: 'ON' });
+  assert.equal(s.client.publications.length, 2);
+  assert.deepEqual(s.client.publications[1], { topic: 'zigbee2mqtt/lamp/set', payload: { read: {
+    cluster: 'genOnOff', attributes: ['onOff'], state_property: s.client.readProperty(),
+  } }, options: { qos: 0, retain: false } });
+  s.client.readReply(1);
   const result = await pending;
   assert.equal(result.request_outcome, 'confirmed');
-  assert.equal(result.confirmation, 'fresh_gateway_report');
+  assert.equal(result.confirmation, 'correlated_device_read');
+  assert.equal(result.state_freshness_verified, true);
+  assert.equal(JSON.stringify(result).includes(s.client.readProperty()), false);
   assert.equal(result.requested_state, 'ON');
   assert.ok(Number.isFinite(Date.parse(result.observed_at)));
   assert.equal(s.options().reconnectPeriod, 0);
@@ -69,7 +84,7 @@ test('subscribes before publish, waits for ACK, sends one non-retained QoS 0 req
   assertClean(s.client);
 });
 
-test('does not accept retained, early, wrong-topic, malformed, or wrong-state reports', async () => {
+test('cached state, optimistic state, old nonce, retained and malformed reports cannot confirm', async () => {
   const s = setup();
   const pending = s.transport.setState(s.settings, device, 'OFF');
   let finished = false;
@@ -83,6 +98,15 @@ test('does not accept retained, early, wrong-topic, malformed, or wrong-state re
   await Promise.resolve();
   assert.equal(finished, false);
   s.client.message('zigbee2mqtt/lamp', { state: 'OFF' });
+  const property = s.client.readProperty();
+  s.client.message('zigbee2mqtt/lamp', { state: 'OFF', linkquality: 100 });
+  s.client.message('zigbee2mqtt/lamp', { codex_home_read_old: { onOff: 0 } });
+  s.client.message('zigbee2mqtt/other', { [property]: { onOff: 0 } });
+  s.client.readReply(0, true);
+  for (const value of [null, {}, '0', 'OFF', 2]) s.client.readReply(value);
+  await Promise.resolve();
+  assert.equal(finished, false);
+  s.client.readReply(0);
   assert.equal((await pending).state, 'OFF');
   assertClean(s.client);
 });
@@ -191,12 +215,14 @@ test('health reads retained bridge state without controlling or querying devices
   }
 });
 
-test('status queries /get and requires fresh state', async () => {
+test('correlated status sends a fixed read-only payload and requires its exact response', async () => {
   const s = setup();
   const pending = s.transport.status(s.settings, device);
   s.client.ready();
-  assert.deepEqual(s.client.publications[0], { topic: 'zigbee2mqtt/lamp/get', payload: { state: '' }, options: { qos: 0, retain: false } });
-  s.client.message('zigbee2mqtt/lamp', { state: 'OFF' });
+  assert.deepEqual(s.client.publications[0], { topic: 'zigbee2mqtt/lamp/set', payload: { read: {
+    cluster: 'genOnOff', attributes: ['onOff'], state_property: s.client.readProperty(),
+  } }, options: { qos: 0, retain: false } });
+  s.client.readReply(0);
   assert.equal((await pending).state, 'OFF');
   assertClean(s.client);
 });
@@ -209,7 +235,7 @@ test('optional availability gate supports devices without availability', async (
   s.client.message('zigbee2mqtt/bridge/state', 'online', true);
   assert.equal(s.client.publications.length, 1);
   assert.equal(s.client.subscriptions[0].topics.includes('zigbee2mqtt/lamp/availability'), false);
-  s.client.message('zigbee2mqtt/lamp', { state: 'ON' });
+  s.client.readReply(1);
   await pending;
   assertClean(s.client);
 });
@@ -247,7 +273,7 @@ test('late errors after completion and after timeout cannot crash the MCP proces
     const pending = s.transport.status(s.settings, device);
     if (successful) {
       s.client.ready();
-      s.client.message('zigbee2mqtt/lamp', { state: 'ON' });
+      s.client.readReply(1);
       await pending;
     } else {
       await assert.rejects(pending, error => error.code === 'MQTT_TIMEOUT');
@@ -330,9 +356,158 @@ test('successful completion removes AbortSignal listener', async () => {
   const controller = new AbortController();
   const pending = s.transport.status(s.settings, device, { signal: controller.signal });
   s.client.ready();
-  s.client.message('zigbee2mqtt/lamp', { state: 'OFF' });
+  s.client.readReply(0);
   await pending;
   assert.equal(getEventListeners(controller.signal, 'abort').length, 0);
   controller.abort();
   assertClean(s.client);
+});
+
+test('unverified mode is read-only and labels potentially cached state honestly', async () => {
+  const s = setup();
+  const unverified = { ...device, state_confirmation: 'unverified' };
+  await assert.rejects(s.transport.setState(s.settings, unverified, 'ON'), error => error.code === 'STATE_CONFIRMATION_REQUIRED' && error.outcome === 'not_sent');
+  assert.equal(s.calls(), 0);
+  const pending = s.transport.status(s.settings, unverified);
+  s.client.ready();
+  assert.deepEqual(s.client.publications[0], { topic: 'zigbee2mqtt/lamp/get', payload: { state: '' }, options: { qos: 0, retain: false } });
+  s.client.message('zigbee2mqtt/lamp', { state: 'ON', linkquality: 10 });
+  const result = await pending;
+  assert.equal(result.confirmation, 'unverified_gateway_report');
+  assert.equal(result.state_freshness_verified, false);
+  assert.equal(result.request_outcome, 'unverified');
+  assertClean(s.client);
+});
+
+test('mismatching correlated read fails unknown without another write or read', async () => {
+  const s = setup();
+  const pending = s.transport.setState(s.settings, device, 'ON');
+  s.client.ready();
+  s.client.message('zigbee2mqtt/lamp', { state: 'ON' });
+  s.client.readReply(0);
+  await assert.rejects(pending, error => error.code === 'STATE_MISMATCH' && error.outcome === 'unknown' && error.retry_safe === false);
+  assert.equal(s.client.publications.length, 2);
+  assertClean(s.client);
+});
+
+test('state alone never confirms, even after the read starts', async () => {
+  const s = setup();
+  const pending = s.transport.setState(s.settings, device, 'ON');
+  s.client.ready();
+  for (let i = 0; i < 3; i++) s.client.message('zigbee2mqtt/lamp', { state: 'ON' });
+  await assert.rejects(pending, error => error.code === 'MQTT_TIMEOUT' && error.outcome === 'unknown');
+  assert.equal(s.client.publications.length, 2);
+  assertClean(s.client);
+});
+
+test('every read has a new property; a prior read response is not accepted', async () => {
+  const first = setup();
+  const one = first.transport.status(first.settings, device);
+  first.client.ready();
+  const oldProperty = first.client.readProperty();
+  first.client.readReply(true);
+  assert.equal((await one).state, 'ON');
+  const second = setup();
+  const two = second.transport.status(second.settings, device);
+  second.client.ready();
+  assert.notEqual(second.client.readProperty(), oldProperty);
+  second.client.message('zigbee2mqtt/lamp', { [oldProperty]: { onOff: 1 }, state: 'ON' });
+  second.client.readReply(false);
+  assert.equal((await two).state, 'OFF');
+});
+
+test('read waits for successful write callback and stops on callback failure', async () => {
+  for (const fails of [false, true]) {
+    const s = setup();
+    const originalPublish = s.client.publish.bind(s.client);
+    let callback;
+    s.client.publish = (topic, payload, options, cb) => {
+      if (JSON.parse(payload).state) {
+        s.client.noPublishCallback = true;
+        callback = cb;
+      } else s.client.noPublishCallback = false;
+      originalPublish(topic, payload, options, cb);
+    };
+    const pending = s.transport.setState(s.settings, device, 'ON');
+    s.client.ready();
+    s.client.message('zigbee2mqtt/lamp', { state: 'ON' });
+    assert.equal(s.client.publications.length, 1);
+    callback(fails ? new Error('private detail') : undefined);
+    if (fails) {
+      await assert.rejects(pending, error => error.code === 'MQTT_PUBLISH_FAILED' && error.outcome === 'unknown');
+      assert.equal(s.client.publications.length, 1);
+    } else {
+      s.client.readReply(1);
+      assert.equal((await pending).state, 'ON');
+      assert.equal(s.client.publications.length, 2);
+    }
+    assertClean(s.client);
+  }
+});
+
+test('cancellation during read preparation never sends a late read', async () => {
+  const s = setup();
+  const ac = new AbortController();
+  const pending = s.transport.setState(s.settings, device, 'ON', { signal: ac.signal });
+  s.client.ready();
+  ac.abort();
+  s.client.message('zigbee2mqtt/lamp', { state: 'ON' });
+  await assert.rejects(pending, error => error.code === 'REQUEST_ABORTED' && error.outcome === 'unknown');
+  assert.equal(s.client.publications.length, 1);
+});
+
+test('cancellation after the correlated read is sent rejects a late valid response', async () => {
+  const s = setup();
+  const controller = new AbortController();
+  const pending = s.transport.setState(s.settings, device, 'ON', { signal: controller.signal });
+  const rejected = assert.rejects(pending, error => error.code === 'REQUEST_ABORTED' && error.outcome === 'unknown' && error.retry_safe === false);
+  s.client.ready();
+  s.client.message('zigbee2mqtt/lamp', { state: 'ON' });
+  assert.equal(s.client.publications.length, 2);
+  controller.abort();
+  s.client.readReply(1);
+  await rejected;
+  assert.equal(s.client.publications.length, 2);
+  assert.equal(getEventListeners(controller.signal, 'abort').length, 0);
+  assertClean(s.client);
+});
+
+test('a late write callback after the deadline never sends a correlated read', async () => {
+  const s = setup();
+  const originalPublish = s.client.publish.bind(s.client);
+  let callback;
+  s.client.noPublishCallback = true;
+  s.client.publish = (topic, payload, options, cb) => {
+    callback = cb;
+    originalPublish(topic, payload, options, cb);
+  };
+  const pending = s.transport.setState(s.settings, device, 'ON');
+  const rejected = assert.rejects(pending, error => error.code === 'MQTT_TIMEOUT' && error.outcome === 'unknown');
+  s.client.ready();
+  s.client.message('zigbee2mqtt/lamp', { state: 'ON' });
+  assert.equal(s.client.publications.length, 1);
+  await rejected;
+  callback();
+  s.client.message('zigbee2mqtt/lamp', { state: 'ON' });
+  assert.equal(s.client.publications.length, 1);
+  assertClean(s.client);
+});
+
+test('going offline during a correlated read rejects a late valid response', async () => {
+  for (const [topic, code] of [
+    ['zigbee2mqtt/bridge/state', 'BRIDGE_OFFLINE'],
+    ['zigbee2mqtt/lamp/availability', 'DEVICE_OFFLINE'],
+  ]) {
+    const s = setup();
+    const pending = s.transport.setState(s.settings, device, 'ON');
+    const rejected = assert.rejects(pending, error => error.code === code && error.outcome === 'unknown');
+    s.client.ready();
+    s.client.message('zigbee2mqtt/lamp', { state: 'ON' });
+    assert.equal(s.client.publications.length, 2);
+    s.client.message(topic, { state: 'offline' });
+    s.client.readReply(1);
+    await rejected;
+    assert.equal(s.client.publications.length, 2);
+    assertClean(s.client);
+  }
 });

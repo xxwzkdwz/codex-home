@@ -4,18 +4,18 @@ import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const identity = Object.freeze({ name: 'codex-home', marketplace: 'codex-home-local', server: 'codex_home', displayName: 'Codex Home', version: '0.1.1', contributor: 'Codex Home contributors' });
+const identity = Object.freeze({ name: 'codex-home', marketplace: 'codex-home-local', server: 'codex_home', displayName: 'Codex Home', version: '0.1.2', contributor: 'Codex Home contributors' });
 const excludedDirectories = new Set(['.git', 'node_modules']);
 const forbiddenDirectories = new Set(['data', 'state', 'secrets', '.cache', 'coverage', 'dist']);
 const requiredFiles = [
-  '.agents/plugins/marketplace.json', '.github/workflows/test.yml', '.gitignore', 'README.md', 'HARDWARE.md', 'SECURITY.md', 'LICENSE',
+  '.agents/plugins/marketplace.json', '.github/workflows/test.yml', '.gitignore', 'README.md', 'HARDWARE.md', 'SECURITY.md', 'LICENSE', 'docs/macos-gateway.md',
   'plugins/codex-home/plugin.json', 'plugins/codex-home/mcp.json',
   'plugins/codex-home/.codex-plugin/plugin.json', 'plugins/codex-home/.mcp.json',
   'plugins/codex-home/package.json', 'plugins/codex-home/package-lock.json',
   'plugins/codex-home/LICENSE', 'plugins/codex-home/README.md',
   'plugins/codex-home/src/server.mjs', 'plugins/codex-home/skills/setup/SKILL.md', 'plugins/codex-home/skills/home-control/SKILL.md',
   'plugins/codex-home/examples/config.example.json',
-  'scripts/install.mjs', 'scripts/check-package.mjs',
+  'scripts/install.mjs', 'scripts/check-package.mjs', 'scripts/test/install.test.mjs',
 ];
 
 // These checks are a release guard, not a guarantee that arbitrary secrets can be detected.

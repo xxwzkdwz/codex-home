@@ -6,7 +6,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
-import { defaultConfigPath } from '../src/config.mjs';
+import { defaultConfigPath, parseConfig, MAX_CONFIG_BYTES } from '../src/config.mjs';
 
 const cli = fileURLToPath(new URL('../src/cli.mjs', import.meta.url));
 const run = promisify(execFile);
@@ -60,6 +60,29 @@ test('registry import rejects extra data without creating a destination', async 
     return true;
   });
   await assert.rejects(fs.stat(destination), { code: 'ENOENT' });
+});
+
+test('registry import rejects oversized expanded output without changing the source or target', async t => {
+  const directory = await fixture(t);
+  const source = path.join(directory, 'registry.json');
+  const destination = path.join(directory, 'settings', 'config.json');
+  const registry = { version: 1, devices: Array.from({ length: 256 }, (_, i) => ({
+    ...device, device_id: `light.demo${i}`, mqtt_topic: `demo${i}`, name: `Demo ${i}`,
+  })) };
+  const original = `${JSON.stringify(registry)}\n`;
+  assert.ok(Buffer.byteLength(original) < MAX_CONFIG_BYTES);
+  assert.ok(Buffer.byteLength(`${JSON.stringify(parseConfig(registry), null, 2)}\n`) > MAX_CONFIG_BYTES);
+  await fs.writeFile(source, original, { mode: 0o600 });
+  await assert.rejects(run(process.execPath, [cli, 'import-registry', source, '--config', destination]), error => {
+    const result = JSON.parse(error.stderr);
+    assert.equal(result.error.code, 'CONFIG_TOO_LARGE');
+    assert.match(result.error.message, /65536/);
+    assert.equal(result.request_outcome, 'not_sent');
+    assert.equal(error.stdout, '');
+    return true;
+  });
+  assert.equal(await fs.readFile(source, 'utf8'), original);
+  await assert.rejects(fs.stat(path.dirname(destination)), { code: 'ENOENT' });
 });
 
 test('CLI init keeps an existing explicit configuration intact', async t => {

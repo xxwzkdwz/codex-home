@@ -25,4 +25,6 @@ jobs:
           sudo apt-get install --yes mosquitto
       - run: npm test
         working-directory: plugins/codex-home
+      - name: Test installer with isolated CLI contracts
+        run: node --test scripts/test/*.test.mjs
       - run: node scripts/check-package.mjs

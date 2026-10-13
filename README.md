@@ -8,7 +8,7 @@
 
 **在 Codex 里说句话，控制你自己的智能灯。** 本地运行、明确登记设备、按你的指令操作。
 
-> v0.1.1：通过你自己的 **Zigbee2MQTT + MQTT 网关** 控制已登记灯具的开关。不是所有品牌通用的智能家居网关，也不是官方 OpenAI 插件。MIT 开源。
+> v0.1.2：通过你自己的 **Zigbee2MQTT + MQTT 网关** 控制已登记灯具的开关。不是所有品牌通用的智能家居网关，也不是官方 OpenAI 插件。MIT 开源。
 
 [买什么设备](HARDWARE.md) · [安装和使用](#安装和使用) · [详细配置](plugins/codex-home/README.md) · [安全说明](SECURITY.md)
 
@@ -26,7 +26,7 @@
 - **只有厂商 App 或封闭网关：**不等于已经具备 Zigbee2MQTT。迁移设备可能需要重新配对、改变原生态，请先核对，不要为了试插件清空已有家庭配置。
 - **不用额外模型 API Key：**使用当前 Codex 会话的模型；仍需要你自己的 Codex 使用权限，不能据此理解为 Codex 免费。
 
-最低硬件是已有电脑、一个兼容 Zigbee 协调器、一只兼容灯泡和匹配的成品灯具；建议使用 USB 延长线。项目已使用 **SONOFF Dongle-PMG24** 完成网关链路验证；[硬件文档](HARDWARE.md)中的 IKEA `LED2201G8`、`LED2109G6` 只是 Zigbee2MQTT 目录候选，未在本项目逐一真机验证，不保证当地库存。购买前核对完整型号、电压、灯头和灯具要求。无需为首次试用拆装墙壁开关；任何市电接线都应交给合格电工。
+最低硬件是已有电脑、一个兼容 Zigbee 协调器、一只兼容灯泡和匹配的成品灯具；建议使用 USB 延长线。项目已使用 **SONOFF Dongle-PMG24** 完成网关链路验证；[硬件文档](HARDWARE.md)中的 IKEA `LED2201G8`、`LED2109G6` 只是 Zigbee2MQTT 目录候选，未在本项目逐一真机验证，不保证当地库存。购买前核对完整型号、电压、灯头和灯具要求；首次试用选非普通调光器控制的台灯，LED2201G8 的[原厂说明书](https://www.ikea.com/rs/sr/manuals/tradfri-led-sijalica-e27-1055-lm-pametno-bezicno-podesavanje-intenziteta-beli-spektar-kugla__AA-2392150-4-2.pdf)明确禁止接普通调光器。无需拆装墙壁开关；任何市电接线都应交给合格电工。
 
 控制时 Codex 所在电脑和 MQTT / Zigbee2MQTT 主机都要运行，灯具要通电。它不是电脑关机后仍可工作的云端助手。网关可以与 Codex 同机，也可以在你自己的树莓派、NAS 或另一台电脑上；后者需要安全的网络连接。
 
@@ -38,9 +38,11 @@
 
 新用户先按 [Zigbee2MQTT 官方入门](https://www.zigbee2mqtt.io/guide/getting-started/) 安装 MQTT broker（如 Mosquitto）和 Zigbee2MQTT，选择实际协调器和串口。插入 USB 协调器不代表网关已经安装。不要照抄其他电脑的串口路径，也不要让两个服务同时占用同一协调器。
 
+**只有一台新 Mac、尚无网关？** 阅读 [macOS 原生网关路线（中英双语）](docs/macos-gateway.md#zh-cn)：区分 broker、Zigbee2MQTT 和 USB 协调器，先排查已有服务，再按需准备 Node 24、Mosquitto 和独立网关目录。这份路线经过官方资料与静态核对，**尚未在全新 Mac 上完成从零真机验收**，不是一键安装器。已工作的网关应直接复用，不要重复安装、覆盖配置或重新生成网络密钥。插件的 Node.js 要求和网关版本要求不同，不能把“22+”套用到任意 Zigbee2MQTT 版本。
+
 按目标型号的说明及 [官方配对指南](https://www.zigbee2mqtt.io/guide/usage/pairing_devices.html) 配对**你准备接入的那只灯**，完成后关闭允许加入。先在 Zigbee2MQTT 前端实际开关一次，确认灯有响应，再接入本插件。已在别的网络配对的灯不要未经确认就重置。
 
-Codex Home 要求该灯的 `state` 支持读取和写入，状态以 JSON 的 `state: ON/OFF` 回报；设备的 Exposes 页面应支持 state 的 `/get` 与 `/set`。优先为该灯启用 [Device Availability](https://www.zigbee2mqtt.io/guide/configuration/device-availability.html)。本插件不负责安装网关、配网或刷固件。
+Codex Home 要求该灯的 `state` 支持读取和写入，普通状态以 JSON 的 `state: ON/OFF` 回报；设备的 Exposes 页面应支持 state 的 `/get` 与 `/set`。0.1.2 的控制确认还要求**默认端点、单通道灯**支持标准 `genOnOff/onOff` 关联读取；不支持群组、多通道或自定义端点。优先为该灯启用 [Device Availability](https://www.zigbee2mqtt.io/guide/configuration/device-availability.html)。**默认只读；能收到普通 ON/OFF 不等于确认来自本次读取，写入前还需完成下面的[关联读取预检](#state-reporting-zh)。** 本插件不负责安装网关、配网或刷固件。
 
 ### 2. 安装插件
 
@@ -102,7 +104,8 @@ node src/cli.mjs import-registry /absolute/path/to/your/devices.json
 | `name` / `aliases` | 你对 Codex 说的名称或别名，例如“示例灯” |
 | `mqtt_topic` | 该**单个设备**在 Zigbee2MQTT 中的准确 friendly_name，不包含前面的 base topic；不是组名 |
 | `enabled` | 示例默认 false；仅核对自己的设备后设为 true |
-| `require_availability` | 默认 true，需要在 Zigbee2MQTT 启用设备 availability；确实无法提供时，由主人理解限制后明确设 false，仍检查 bridge 并要求新鲜 state |
+| `require_availability` | 默认 true，需要在 Zigbee2MQTT 启用设备 availability；确实无法提供时，由主人理解限制后明确设 false，仍检查 bridge，不替代状态回报前提 |
+| `state_confirmation` | 默认 `unverified`，包括缺少此字段的旧配置；普通只读回报不作为设备状态确认，写入被拒绝。核对网关设置后，主人可选择 `correlated_read` 并先做只读 status 预检 |
 
 目前 topic 路径只接受英文字母、数字、点、下划线、连字符及合法 `/` 分段；中文可用于 `name` 和 `aliases`。不要未经核对改已有 friendly_name，它可能被其他自动化引用。完整字段、凭据和文件权限见 [详细配置](plugins/codex-home/README.md)。macOS/Linux 私有文件权限应为 0600，Windows 应限制为自己的账号。
 
@@ -116,6 +119,18 @@ node src/cli.mjs status light.demo
 
 将 `light.demo` 换成你登记的 ID。`check` 读取网关状态，`list` 读取本机白名单，`status` 向单个设备发出状态查询，不改变灯。
 
+<a id="state-reporting-zh"></a>
+
+#### 写入前：由主人核对该灯的关联读取
+
+Zigbee2MQTT 的普通 `state` 可能来自缓存、乐观更新或群组推测；**只排除 retained 消息不能证明灯已执行**。0.1.2 默认 `state_confirmation: "unverified"`：`status` 仍通过 `/get` 读取网关回报，但不能据此清除未知结果锁；开关请求返回 `STATE_CONFIRMATION_REQUIRED` / `not_sent`，不会发控制命令。
+
+主人在维护时机核对**这一盏灯**：将 `'^codex_home_read_.*$'` 合并进已有 `filtered_cache` 数组，防止随机读取字段不断累积；保留 `optimistic: true`（默认），因为 Zigbee2MQTT 也通过该发布通道转发通用读取的实际结果，设 false 会导致读回超时。`filtered_attributes` / `filtered_optimistic` 不得过滤这些字段，`mqtt.output` 必须是 `json` 或 `attribute_and_json`。不覆盖原过滤规则，不全局关闭 `cache_state`，不删除状态文件、配对数据库或网络密钥。见 [Zigbee2MQTT 单设备选项](https://www.zigbee2mqtt.io/guide/configuration/devices-groups.html)及[单灯示例](docs/macos-gateway.md#reporting-zh)。插件不会替你修改网关。
+
+核对后，在插件自己的该灯 JSON 登记中设 `state_confirmation: "correlated_read"`，**先运行只读 `node src/cli.mjs status light.demo` 预检**。这个模式通过 `/set` 包装固定的 ZCL **read**（只读 `genOnOff/onOff`，不是开关命令），为每次查询生成独立随机字段 `codex_home_read_<32hex>`；只有对应字段里的实际读取结果才可确认，普通 `state` 一概不能确认。MQTT ACL 需允许此固定读取使用的 `/set` topic。预检未得到关联读回时停止，不开灯、不退回旧版或只改标记绕过。安装/setup 仍不授权开关。
+
+控制只发送一次 ON/OFF；普通匹配 `state` 仅作为发起关联读取的时机信号，随后只发一次关联 read。关联值不匹配为 `STATE_MISMATCH` / `unknown`，超时为 `unknown`，不重发。`confirmed` 表示关联读取的**当前设备开关位**满足条件，不证明实际光照或这次命令是唯一原因。源码依据是 [Zigbee2MQTT 2.14.2](https://github.com/Koenkk/zigbee2mqtt/blob/2.14.2/lib/extension/publish.ts)与 [zigbee-herdsman-converters 26.115.1 的 read 转换器](https://github.com/Koenkk/zigbee-herdsman-converters/blob/v26.115.1/src/converters/toZigbee.ts)；其他版本和具体灯仍需预检。
+
 ### 4. 先读状态，再按你的指令控制
 
 依次对 Codex 说（名称替换成自己登记的灯）：
@@ -127,7 +142,7 @@ node src/cli.mjs status light.demo
 把示例灯关闭。
 ```
 
-只有明确开关指令才会控制设备。安装、配网说明和只读检查不意味着允许自动闪灯。首次测试请人在现场观察；工具的 `confirmed` 表示收到匹配的新鲜网关状态，不是独立光照测量。若回执不确定，先查状态，不要让模型不断重试。
+只有满足关联读取前提且收到明确开关指令才会控制设备。安装、配网说明和只读检查不意味着允许自动闪灯。首次测试请人在现场观察；关联读取确认的是设备开关位，不是独立测量到灯亮灭。若回执不确定，先查状态；`unverified` 回报不能当作已经解除不确定性，不要让模型不断重试。
 
 ## 常见问题
 
@@ -138,6 +153,8 @@ node src/cli.mjs status light.demo
 | 插件已安装，但列表为空 | `init` 创建的是空白配置，合成示例默认停用；不会自动扫描或登记你的家庭设备 |
 | 网关 offline 或换 USB 后失联 | 核对原网关服务、线缆及当前串口；保留原配对数据库和密钥，不清库或盲目重配 |
 | 网关 online，但设备不可用/读状态超时 | 确认灯通电、Zigbee2MQTT 前端可控、topic 正确、支持 state 查询和 availability；online 只说明网关在线 |
+| `STATE_CONFIRMATION_REQUIRED` / `unverified` | 未选择并验证该灯的关联读取；按[关联读取说明](#state-reporting-zh)核对，再做只读 status 预检，不要仅为放行写入而改标记 |
+| 关联 status 超时 | 核对默认端点的 `genOnOff/onOff`、MQTT JSON 输出、`optimistic` 发布通道和过滤规则；不要通过反复开关诊断 |
 | `request_outcome: unknown` | 命令可能已生效，停止写入，查询状态；不要自动重试或反向“恢复” |
 | 提示 marketplace 已属于其他来源 / 缓存与源码不同 | 安装器会安全停止。先核对已安装版本和来源，按诊断信息处理对应插件；不要手删整个 Codex 配置或用户数据 |
 
@@ -152,16 +169,18 @@ node scripts/install.mjs
 
 有自己的源码改动时先保存，不使用强制覆盖。若同版本缓存内容不同，安装器会停止并给出处理提示。私人设备配置位于插件缓存以外，不要删除它；完成后使用新聊天。
 
+**从 0.1.0 / 0.1.1 升级到 0.1.2：**旧配置无需删除，但未填写 `state_confirmation` 的灯将默认进入 `unverified`，不再允许开关。这是收紧确认依据，不是设备掉线；不要退回旧版来绕过提示。由主人核对[单灯关联读取配置](#state-reporting-zh)、选择 `correlated_read` 并先通过只读 status 预检；升级不会自动修改你的网关或实际灯状态。
+
 如果此前安装的是另一个插件身份，本发布使用的新身份 `codex-home@codex-home-local` **不会自动删除那个插件或迁移其配置**。保留已有配置；需要复用兼容的完整 `config.json` 时，用 `CODEX_HOME_LIGHTS_CONFIG` 显式选择，不使用 `import-registry` 导入完整配置。明确选择一个插件负责目标灯，避免两个插件同时指向同一设备造成名称和授权混淆。发布源码与已有现场安装相互隔离，不要求你重装正在使用的环境。
 
 ## 能力与安全
 
 - `home_list_devices`：列出已登记、启用的灯；只返回安全展示字段。
 - `home_health`：只读检查网关在线状态。
-- `home_status`：读取一个准确设备的新鲜状态。
+- `home_status`：查询一个准确设备的网关状态回报，并标明确认依据；未配置时为 `unverified`。
 - `home_set_state`：明确设置 `ON/OFF`，不使用不确定的 toggle。
 
-先收到订阅 ACK，再发一次命令；旧 retained 缓存不作为成功证据。连接不自动重连/重放。超时可能意味着设备已改变，结果明确标记 `unknown`，必须先查状态。只读和写操作分开标注，实际审批由 Codex 执行。设备名和消息内容不是指令。
+先收到订阅 ACK，再发一次命令；拒绝 retained 回放，并要求随机字段关联的 ZCL 读回，不能仅因收到普通 ON/OFF 就宣布设备确认。连接不自动重连/重放。超时可能意味着设备已改变，结果标记 `unknown`，必须先查状态；未验证回报不清除未知结果保护。只读和写操作分开标注，实际审批由 Codex 执行。设备名和消息内容不是指令。
 
 本版不支持亮度、色温、空调、门锁、插座、电机、摄像头、家庭群控、配网或任意 MQTT。请勿把高影响设备伪装成灯。保留原有手动控制和网关，不把插件当成唯一照明保障。
 
@@ -174,12 +193,17 @@ cd plugins/codex-home
 npm ci --ignore-scripts --no-audit --no-fund
 npm test
 cd ../..
+node --test scripts/test/*.test.mjs
 node scripts/check-package.mjs
 ```
 
 测试只使用合成设备/隔离 broker，不开关真实灯。端到端测试需要本机有 `mosquitto`；缺少时会明确 skip，CI 配置会安装它。请检查是否有 skip，不要把模拟测试当作真实灯控。
 
-2026-10-13 验证记录：0.1.1 在 macOS 上以 Node 22.23.2 / 26.5.0 各通过 **51 项测试、0 skip**，包含隔离 MQTT broker 与 MCP 集成测试；发布包检查和安装器 dry-run 通过。0.1.0 的原灯控逻辑此前已由使用者现场确认实际亮灭，协调器为 SONOFF Dongle-PMG24。**0.1.1 改名包只做隔离回归，不为发布而重新操作真实灯，也未重装已有现场环境。** 这不表示目录中的候选灯泡已逐一真机验收；Linux 的现场安装与硬件验收尚未完成，Windows 安装器尚未适配。
+2026-10-13 本地验证记录：0.1.2 在 macOS 上以 Node 22.23.2 / 26.5.0 各通过 **75 项运行测试 + 22 项安装器契约测试，0 fail、0 skip**。包含独立高端口 broker、模拟灯及真实 MCP stdio 集成；安装器测试使用隔离假 CLI，不是 22 次真实安装。32 文件发布检查、安装器 dry-run、两项技能校验和依赖审计通过（当次 0 已知漏洞）。CI 已加入安装器回归；这些本地结果不代表新版本的 GitHub CI 已执行。
+
+历史上 0.1.0 的原灯控逻辑已由使用者现场确认实际亮灭，协调器为 SONOFF Dongle-PMG24；0.1.1 改名包只做隔离回归。本次没有重装已有现场环境或再次操作真实灯。目录中的候选灯泡未逐一真机验收；Linux 的现场安装与硬件验收尚未完成，Windows 安装器尚未适配。
+
+**0.1.2 新关联读取协议的验收边界：仅源码核对和隔离模拟验证，尚未完成真实网关/灯具验收。** 0.1.0 的现场成功不能代替新协议验收，两个 IKEA 候选的普通 state GET/SET 支持也不等于本次关联链路已经验收。
 
 ## 发布 GitHub
 
@@ -195,7 +219,7 @@ GitHub 源码可供别人克隆安装；这不等于进入 OpenAI 官方公共�
 
 **Control your own lights by asking Codex.** Codex Home runs locally, operates only on explicitly configured devices, and follows your instructions.
 
-> v0.1.1 controls individual allowlisted lights through **your own Zigbee2MQTT + MQTT gateway**. It is not a universal smart-home gateway or an official OpenAI plugin. MIT licensed.
+> v0.1.2 controls individual allowlisted lights through **your own Zigbee2MQTT + MQTT gateway**. It is not a universal smart-home gateway or an official OpenAI plugin. MIT licensed.
 
 [Hardware guide (Chinese)](HARDWARE.md) · [Installation](#installation-and-use) · [Detailed configuration](plugins/codex-home/README.md#english) · [Security](SECURITY.md) · [简体中文](#zh-cn)
 
@@ -222,14 +246,14 @@ The Codex computer and MQTT/Zigbee2MQTT host must be running when you issue a co
 | Computer | Reuse one you own | Must run the supported Codex CLI, Node.js 22+, and the plugin. The gateway can run on this computer too. |
 | Zigbee coordinator | One supported adapter | **SONOFF Dongle-PMG24** was used for the project's hardware validation. Check the complete model, not only the product-family name. |
 | Zigbee bulb | One compatible bulb | **IKEA LED2201G8** and **LED2109G6** are exact-model candidates listed by Zigbee2MQTT, not individually hardware-tested combinations in this project. Availability in your region has not been confirmed. |
-| Finished light fixture | One suitable lamp | Match the bulb's regional voltage, base, dimensions, and the fixture's rating. A tabletop lamp avoids any wall-wiring modification. |
+| Finished light fixture | One suitable lamp | Match the bulb's regional voltage, base, dimensions, and the fixture's rating. Choose a tabletop lamp without a standard dimmer; no wall-wiring modification is needed. |
 | USB extension or data adapter | As needed | An extension can reduce interference. Check the coordinator package before buying another; an appropriate USB-C data adapter may be needed. |
 
 Candidate compatibility pages: [LED2201G8](https://www.zigbee2mqtt.io/devices/LED2201G8.html), [LED2109G6](https://www.zigbee2mqtt.io/devices/LED2109G6.html). A listing is not a guarantee for every regional variant or firmware. Do not substitute a similarly named Wi-Fi or Matter product. See the [hardware guide](HARDWARE.md) for manufacturer links and buying checks.
 
 For Dongle-PMG24, use compatible **Zigbee coordinator/NCP firmware** with `adapter: ember`; do not enable `rtscts: true`. It does not use router, Thread, or multiprotocol firmware for this setup. Match firmware and baud rate to your actual adapter and Zigbee2MQTT version; do not flash working hardware merely to install the plugin. [Zigbee2MQTT Ember adapter guide](https://www.zigbee2mqtt.io/guide/adapters/emberznet.html)
 
-Do not modify mains wiring for a first test. Any relay installation, wall-switch wiring, or electrical work must be handled by a qualified electrician. Keep manual controls available.
+Do not connect the LED2201G8 to a standard dimmer; its [manufacturer instructions](https://www.ikea.com/rs/sr/manuals/tradfri-led-sijalica-e27-1055-lm-pametno-bezicno-podesavanje-intenziteta-beli-spektar-kugla__AA-2392150-4-2.pdf) explicitly prohibit this. Check the exact regional bulb's instructions even if the fixture fits. Do not modify mains wiring for a first test. Any relay installation, wall-switch wiring, or electrical work must be handled by a qualified electrician. Keep manual controls available.
 
 ### Installation and use
 
@@ -239,9 +263,11 @@ If the Zigbee2MQTT frontend already controls the intended light correctly, proce
 
 Otherwise, follow the [official Zigbee2MQTT getting-started guide](https://www.zigbee2mqtt.io/guide/getting-started/) to install an MQTT broker, such as Mosquitto, and Zigbee2MQTT. Select your actual coordinator and serial path. Plugging in a USB adapter alone does not install the gateway. Do not copy someone else's serial path or let two services use one coordinator simultaneously.
 
+**Starting with a Mac and no gateway?** Use the bilingual [native macOS gateway route](docs/macos-gateway.md#en). It separates the broker, Zigbee2MQTT, and USB coordinator; checks existing services first; and explains Node 24, Mosquitto, and a separate gateway directory. This route has received official-source and static review, **not a clean-Mac hardware acceptance test**. It is not a one-click installer. Reuse working gateways; never replace their settings, regenerate network keys, or start a duplicate instance. The plugin's Node.js requirement does not establish which Node versions a particular Zigbee2MQTT release supports.
+
 Pair only the intended light using its exact-model instructions and the [official pairing guide](https://www.zigbee2mqtt.io/guide/usage/pairing_devices.html), then close permit-join. With the owner's permission, verify a physical on/off change in the Zigbee2MQTT frontend before adding the plugin. Do not reset devices already used by another network without checking the consequences.
 
-The light must support reading and writing `state` and report JSON with `state: ON/OFF`; its Exposes documentation should allow both state `/get` and `/set`. Prefer enabling [Device Availability](https://www.zigbee2mqtt.io/guide/configuration/device-availability.html) for that light. This plugin does not install the gateway, pair devices, or flash firmware.
+The light must support state `/get` and `/set` and publish ordinary `state: ON/OFF` in JSON. Version 0.1.2 additionally requires correlated `genOnOff/onOff` reads on a **single-channel light's default endpoint**; groups, multiple channels, and custom endpoints are unsupported. Prefer enabling [Device Availability](https://www.zigbee2mqtt.io/guide/configuration/device-availability.html). **It is read-only by default: ordinary ON/OFF does not establish a response to the current read. Complete the [correlated-read preflight](#state-reporting-en) before writes.** This plugin does not install the gateway, pair devices, or flash firmware.
 
 #### 2. Install the plugin
 
@@ -304,7 +330,8 @@ Use the [synthetic example](plugins/codex-home/examples/config.example.json) as 
 | `kind` / `capabilities` | `light` and `["state"]`; do not register appliances as lights. |
 | `mqtt_topic` | The exact Zigbee2MQTT friendly name of **one device**, excluding the base topic. Not a group. |
 | `enabled` | Repository examples use false. Set true only after confirming the intended device. |
-| `require_availability` | Defaults to true and needs device availability in Zigbee2MQTT. Only deliberately set false if it cannot be provided; bridge checks and fresh state confirmation still apply. |
+| `require_availability` | Defaults to true and needs device availability in Zigbee2MQTT. Only deliberately set false if it cannot be provided; bridge checks still apply, and this does not replace the reporting prerequisite. |
+| `state_confirmation` | Defaults to `unverified`, including old configurations without this field: ordinary reports do not confirm device state, and writes are refused. After checking gateway settings, select `correlated_read` and run a read-only status preflight. |
 
 Topic segments accept ASCII letters, digits, dots, underscores, hyphens, and valid `/` separators, not wildcard subscriptions or reserved control segments. Human-readable names can use other languages. Do not rename an existing friendly name without checking other automations that reference it.
 
@@ -322,6 +349,18 @@ node src/cli.mjs status light.demo
 
 Replace `light.demo` with your configured ID. `check` reads bridge availability, `list` reads the local allowlist, and `status` requests one device's state without changing it. The CLI intentionally has no light-switch command.
 
+<a id="state-reporting-en"></a>
+
+##### Before writing: verify this light's correlated read
+
+Zigbee2MQTT's ordinary `state` can come from cache, optimistic updates, or group inference. **Rejecting retained messages alone does not prove execution.** Version 0.1.2 defaults to `state_confirmation: "unverified"`: status uses `/get`, and reports do not clear unknown-outcome protection. Switching returns `STATE_CONFIRMATION_REQUIRED` / `not_sent` without sending a control command.
+
+During a maintenance window, the owner should merge `'^codex_home_read_.*$'` into **this light's** existing `filtered_cache` array to prevent dynamic read fields accumulating. Keep `optimistic: true` (the default): Zigbee2MQTT also publishes actual generic-read results through that channel; false causes the readback to time out. Neither `filtered_attributes` nor `filtered_optimistic` may filter those fields, and `mqtt.output` must be `json` or `attribute_and_json`. Preserve existing rules, do not disable global `cache_state`, and do not delete state files, pairing databases, or keys. See [upstream device options](https://www.zigbee2mqtt.io/guide/configuration/devices-groups.html) and the [single-light example](docs/macos-gateway.md#reporting-en). The plugin does not change the gateway for you.
+
+After checking, set `state_confirmation: "correlated_read"` in this light's **plugin JSON** and first run the read-only `node src/cli.mjs status light.demo` preflight. This mode wraps a fixed ZCL **read** of `genOnOff/onOff` in `/set`; it does not switch the light. Each query uses a new random `codex_home_read_<32hex>` field, and only the actual read result under that exact field can confirm state. Ordinary `state` never confirms it. MQTT ACLs must permit that fixed read on the `/set` topic. If the preflight does not receive the correlated reply, stop rather than switching, downgrading, or changing a flag to bypass it. Installation/setup still does not authorize control.
+
+Control sends ON/OFF once. A matching ordinary `state` is only a timing signal to issue one correlated read, not confirmation. A mismatched readback returns `STATE_MISMATCH` / `unknown`; timeout returns `unknown`, without replay. `confirmed` means the **current device on/off bit** satisfied the correlated read, not that illumination was measured or this command uniquely caused it. The source-reviewed basis is [Zigbee2MQTT 2.14.2](https://github.com/Koenkk/zigbee2mqtt/blob/2.14.2/lib/extension/publish.ts) and the [zigbee-herdsman-converters 26.115.1 read converter](https://github.com/Koenkk/zigbee-herdsman-converters/blob/v26.115.1/src/converters/toZigbee.ts). Other versions and individual lights still require preflight checks.
+
 #### 4. Read first, then explicitly request control
 
 For example, using your configured name:
@@ -333,7 +372,7 @@ Turn Demo light on and leave it on.
 Turn Demo light off.
 ```
 
-Installing, configuring, or checking the plugin is not permission to flash a light. Stay nearby for the first control test. A `confirmed` result means the gateway sent a matching fresh state report, not that a separate light sensor proved physical illumination. If the outcome is unknown, read state instead of repeatedly issuing commands.
+Control requires both the correlated-read prerequisite and an explicit switching request. Installing, configuring, or checking the plugin is not permission to flash a light. Stay nearby for the first control test. The correlated reply confirms the device's on/off bit, not physical illumination. If the outcome is unknown, query state, but do not treat an `unverified` report as clearing the uncertainty or repeatedly issue commands.
 
 ### Troubleshooting
 
@@ -344,6 +383,8 @@ Installing, configuring, or checking the plugin is not permission to flash a lig
 | Device list is empty | `init` creates an empty configuration and sample devices are disabled. Nothing is automatically discovered or enrolled. |
 | Gateway is offline or disappeared after a USB change | Check existing services, cables, and the actual serial path. Preserve pairing databases and keys; do not reset the network. |
 | Gateway is online but a light is unavailable or times out | Check light power, frontend control, its exact topic, state-query support, and availability. An online bridge does not prove a device is online. |
+| `STATE_CONFIRMATION_REQUIRED` / `unverified` | The light's correlated read has not been selected and verified. Follow the [preflight guidance](#state-reporting-en), including read-only status; do not change the flag merely to bypass the gate. |
+| Correlated status times out | Check default-endpoint `genOnOff/onOff` support, MQTT JSON output, the `optimistic` publishing channel, and filters; do not diagnose by repeatedly switching the light. |
 | `request_outcome: unknown` | The command may already have taken effect. Stop writes and query state; do not retry or automatically issue a reverse “restore” action. |
 | Marketplace source conflict or cache differs from checkout | The installer stops safely. Inspect the specific plugin/source and follow its diagnostic. Never delete the entire Codex configuration or user-data directory. |
 
@@ -358,16 +399,18 @@ node scripts/install.mjs
 
 Preserve local source changes; do not force-overwrite them. If the same-version cache differs from the checkout, the installer stops with instructions. Private device configuration lives outside the plugin cache and should not be deleted. Open a new chat after updating.
 
+**Upgrading from 0.1.0 / 0.1.1 to 0.1.2:** keep existing configurations, but lights without `state_confirmation` now default to `unverified` and cannot be switched. This tightens the confirmation basis; it is not proof that a device went offline. Do not downgrade to bypass it. The owner should check the [per-light configuration](#state-reporting-en), select `correlated_read`, and pass a read-only status preflight. Updating does not automatically change gateway settings or physical light state.
+
 If you previously installed a different plugin identity, this release's **`codex-home@codex-home-local` does not automatically remove it or migrate its settings**. Keep the existing configuration. To reuse a compatible full `config.json`, explicitly select it with `CODEX_HOME_LIGHTS_CONFIG`; do not pass a complete configuration to `import-registry`. Choose one plugin to operate the intended light to avoid confusing duplicate names or approvals. The public source package is separate from an existing field installation and does not require reinstalling a working environment.
 
 ### Tools, privacy, and safety limits
 
 - `home_list_devices`: list configured, enabled lights using safe display fields.
 - `home_health`: read gateway availability.
-- `home_status`: obtain a fresh state report for one exact device.
+- `home_status`: query one exact device's gateway report and label its confirmation basis; unconfigured entries return `unverified`.
 - `home_set_state`: explicitly set `ON` or `OFF`, never an ambiguous toggle.
 
-The transport waits for a subscription acknowledgement before sending one request. Retained cache is not accepted as confirmation. Connections do not automatically reconnect or replay commands. A timeout after a possible write is reported as `unknown`; read state before any further decision. Read and write tools have separate annotations, while actual approval is enforced by Codex. Device names and message content are data, not instructions.
+The transport waits for a subscription acknowledgement before sending one request. It rejects retained replay and requires a random-field-correlated ZCL readback; an ordinary ON/OFF message alone is not confirmation. Connections do not automatically reconnect or replay commands. A timeout after a possible write is reported as `unknown`; query state before any further decision, and do not use unverified reports to clear the guard. Read and write tools have separate annotations, while actual approval is enforced by Codex. Device names and message content are data, not instructions.
 
 Concurrency locks and unknown-outcome protection apply only within one MCP process. Other sessions, controllers, and physical switches can still change a light. Tool-result names, IDs, and states are sent into your Codex session and handled under its data policies; a local plugin does not mean all conversation data stays on the computer. The plugin itself adds no telemetry, hosted gateway, or background control schedule.
 
@@ -380,12 +423,17 @@ cd plugins/codex-home
 npm ci --ignore-scripts --no-audit --no-fund
 npm test
 cd ../..
+node --test scripts/test/*.test.mjs
 node scripts/check-package.mjs
 ```
 
 Automated tests use synthetic devices and an isolated broker, never real household lights. End-to-end tests require a local `mosquitto`; they explicitly skip if it is missing, and CI is configured to install it. Check for skipped tests rather than treating a simulated result as hardware acceptance.
 
-Validation on 2026-10-13: version 0.1.1 passed **51 tests with zero skips** on macOS with each of Node 22.23.2 and 26.5.0, including isolated MQTT broker and MCP integration tests. The package checker and installer dry-run also passed. A person on site previously confirmed physical on/off changes using the original 0.1.0 control logic and a SONOFF Dongle-PMG24 coordinator. **The renamed 0.1.1 package received isolated regression tests only; publishing it did not trigger another real-light test or reinstall the existing field environment.** This does not certify every candidate bulb. Linux field installation and hardware acceptance remain incomplete; the Windows installer remains unadapted.
+Local validation on 2026-10-13: version 0.1.2 passed **75 runtime tests + 22 installer-contract tests, with zero failures or skips**, on macOS with each of Node 22.23.2 and 26.5.0. This includes an isolated high-port broker, synthetic lights and real MCP stdio integration. Installer contracts use isolated fake CLIs, not 22 real installations. The 32-file package check, installer dry-run, both skill validators and dependency audit passed (zero known advisories at that check). CI now includes installer regression tests; local results do not mean the new GitHub CI has run.
+
+Historically, a person on site confirmed physical switching with the original 0.1.0 logic and a SONOFF Dongle-PMG24 coordinator; 0.1.1 received isolated regression tests only. This work did not reinstall the existing field environment or operate real lights again. Candidate bulbs have not each received hardware acceptance. Linux field installation and hardware acceptance remain incomplete; the Windows installer remains unadapted.
+
+**Version 0.1.2's new correlated-read protocol has source review and isolated simulation only, not real-gateway/light acceptance.** The original 0.1.0 physical test does not validate the new protocol; the two IKEA candidates' ordinary state GET/SET support also does not establish acceptance of this correlated path.
 
 ### Publishing and contributing
 

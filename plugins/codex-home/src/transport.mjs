@@ -1,4 +1,5 @@
 import mqtt from 'mqtt';
+import { randomUUID } from 'node:crypto';
 
 const MAX_MESSAGE_BYTES = 8192;
 // Keep this context-free sink on a disposed client. end(true) closes sockets
@@ -37,6 +38,17 @@ function lightState(payload) {
   }
 }
 
+function readState(payload, property) {
+  try {
+    const body = JSON.parse(payload.toString('utf8'));
+    if (!body || !Object.hasOwn(body, property)) return undefined;
+    const value = body[property]?.onOff;
+    if (value === 1 || value === true) return 'ON';
+    if (value === 0 || value === false) return 'OFF';
+  } catch { /* Malformed or unrelated reports cannot confirm a read. */ }
+  return undefined;
+}
+
 /** One short-lived, non-reconnecting connection per operation. */
 export class MqttTransport {
   constructor({ connect = mqtt.connect } = {}) {
@@ -55,6 +67,9 @@ export class MqttTransport {
     if (state !== 'ON' && state !== 'OFF') {
       throw new HomeError('INVALID_STATE', 'Only ON and OFF are supported.');
     }
+    if (device.state_confirmation !== 'correlated_read') {
+      throw new HomeError('STATE_CONFIRMATION_REQUIRED', 'Prepare and check correlated device reads for this light before enabling control.');
+    }
     return this.#run(config, device, 'set', state, signal);
   }
 
@@ -65,6 +80,10 @@ export class MqttTransport {
     const availabilityTopic = device?.require_availability ? `${stateTopic}/availability` : undefined;
     const topics = [bridgeTopic, ...(availabilityTopic ? [availabilityTopic] : []), ...(stateTopic ? [stateTopic] : [])];
     const topicSet = new Set(topics);
+    const correlated = device?.state_confirmation === 'correlated_read';
+    // Z2M's generic read converter returns this property only after an actual
+    // ZCL read. Never reuse a property: cached/optimistic `state` is not evidence.
+    const readProperty = correlated ? `codex_home_read_${randomUUID().replaceAll('-', '')}` : undefined;
 
     return new Promise((resolve, reject) => {
       let client;
@@ -76,6 +95,9 @@ export class MqttTransport {
       let availability;
       let requestStarted = false;
       let controlMayHaveBeenSent = false;
+      let controlPublished = false;
+      let matchingReport = false;
+      let readStarted = false;
       const timer = setTimeout(() => fail('MQTT_TIMEOUT', 'Timed out waiting for the gateway. A state change may have occurred if the outcome is unknown.'), settings.timeout_ms);
 
       const listeners = {
@@ -173,13 +195,37 @@ export class MqttTransport {
         // From invocation onward, /set may have reached the gateway even if a
         // callback fails. No retry and no MQTT reconnect can replay the action.
         controlMayHaveBeenSent = operation === 'set';
+        if (operation === 'get' && correlated) {
+          publishRead();
+          return;
+        }
         const body = operation === 'set' ? { state: requestedState } : { state: '' };
         try {
           client.publish(`${stateTopic}/${operation}`, JSON.stringify(body), { qos: 0, retain: false }, error => {
-            if (!done && error) fail('MQTT_PUBLISH_FAILED', 'The MQTT request could not be confirmed.');
+            if (shouldStop()) return;
+            if (error) { fail('MQTT_PUBLISH_FAILED', 'The MQTT request could not be confirmed.'); return; }
+            if (operation === 'set') {
+              controlPublished = true;
+              if (matchingReport) publishRead();
+            }
           });
         } catch {
           fail('MQTT_PUBLISH_FAILED', 'The MQTT request could not be confirmed.');
+        }
+      }
+
+      function publishRead() {
+        if (shouldStop() || readStarted) return;
+        readStarted = true;
+        // Fixed, read-only ZCL operation despite Z2M routing it through /set.
+        // No caller-controlled attributes, endpoints or arbitrary payloads.
+        const body = { read: { cluster: 'genOnOff', attributes: ['onOff'], state_property: readProperty } };
+        try {
+          client.publish(`${stateTopic}/set`, JSON.stringify(body), { qos: 0, retain: false }, error => {
+            if (!done && error) fail('MQTT_PUBLISH_FAILED', 'The device read could not be confirmed.');
+          });
+        } catch {
+          fail('MQTT_PUBLISH_FAILED', 'The device read could not be confirmed.');
         }
       }
 
@@ -199,18 +245,29 @@ export class MqttTransport {
           advance();
           return;
         }
-        // Retained messages (and any report before publication) are cache, not
-        // confirmation. Z2M has no correlation ID: even a fresh report does not
-        // prove physical illumination or uniquely identify our request.
+        // Fresh MQTT envelopes may contain cached or optimistic state. They
+        // never confirm control or clear uncertainty; only this read's nonce can.
         if (!requestStarted || packet.retain !== false) return;
-        const state = lightState(payload);
-        if (!state || (operation === 'set' && state !== requestedState)) return;
+        if (correlated && operation === 'set' && !readStarted && lightState(payload) === requestedState) {
+          // Use a normal report only as a timing hint, avoiding a read that
+          // races ahead of Z2M's async set. A concurrent report can still race;
+          // a mismatching device read then fails unknown, without another write.
+          matchingReport = true;
+          if (controlPublished) publishRead();
+        }
+        const state = correlated ? (readStarted ? readState(payload, readProperty) : undefined) : lightState(payload);
+        if (!state) return;
+        if (operation === 'set' && state !== requestedState) {
+          fail('STATE_MISMATCH', 'The device read did not match the requested state. Do not retry automatically; read status before further control.');
+          return;
+        }
         finish(undefined, {
           state,
-          confirmation: 'fresh_gateway_report',
+          confirmation: correlated ? 'correlated_device_read' : 'unverified_gateway_report',
+          state_freshness_verified: correlated,
           observed_at: new Date().toISOString(),
           ...(operation === 'set' ? { requested_state: requestedState } : {}),
-          request_outcome: 'confirmed',
+          request_outcome: correlated ? 'confirmed' : 'unverified',
         });
       }
 

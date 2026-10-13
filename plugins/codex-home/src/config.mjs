@@ -1,7 +1,10 @@
 import fs from 'node:fs/promises';
+import { constants } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { z } from 'zod';
+
+export const MAX_CONFIG_BYTES = 65536;
 
 export class ConfigError extends Error {
   constructor(code, message) { super(message); this.code = code; this.outcome = 'not_sent'; }
@@ -16,6 +19,7 @@ export const deviceSchema = z.object({
   kind: z.literal('light'), mqtt_topic: topic.refine(v => !v.split('/').some(s => ['bridge', 'get', 'set', 'availability'].includes(s))),
   capabilities: z.array(z.literal('state')).min(1).max(1).default(['state']),
   enabled: z.boolean().default(true), require_availability: z.boolean().default(true),
+  state_confirmation: z.enum(['unverified', 'correlated_read']).default('unverified'),
 }).strict();
 export const configSchema = z.object({
   version: z.literal(1),
@@ -45,12 +49,15 @@ export function defaultConfigPath(env = process.env) {
   return path.join(base, 'config.json');
 }
 
-export async function readPrivateFile(file, maxBytes = 65536) {
+export async function readPrivateFile(file, maxBytes = MAX_CONFIG_BYTES) {
   let handle;
   try {
-    handle = await fs.open(file, 'r');
+    // A POSIX FIFO must not block open() before the descriptor can be checked.
+    // Windows has no O_NONBLOCK flag; regular-file validation still applies.
+    handle = await fs.open(file, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
     const stat = await handle.stat();
-    if (!stat.isFile() || stat.size > maxBytes) throw new ConfigError('CONFIG_INVALID', '配置或凭据文件不是大小合规的普通文件。');
+    if (!stat.isFile()) throw new ConfigError('CONFIG_INVALID', '配置或凭据文件必须是普通文件。');
+    if (stat.size > maxBytes) throw new ConfigError('CONFIG_TOO_LARGE', `配置或凭据文件超过 ${maxBytes} 字节上限。`);
     if (process.platform !== 'win32' && ((stat.mode & 0o077) !== 0 || (process.getuid && stat.uid !== process.getuid())))
       throw new ConfigError('CONFIG_PERMISSIONS', '配置或凭据文件必须属于当前用户，权限为 0600。');
     const buffer = Buffer.alloc(maxBytes + 1);
@@ -60,7 +67,7 @@ export async function readPrivateFile(file, maxBytes = 65536) {
       if (!bytesRead) break;
       length += bytesRead;
     }
-    if (length > maxBytes) throw new ConfigError('CONFIG_INVALID', '配置或凭据文件超过安全大小。');
+    if (length > maxBytes) throw new ConfigError('CONFIG_TOO_LARGE', `配置或凭据文件超过 ${maxBytes} 字节上限。`);
     return buffer.subarray(0, length).toString('utf8');
   } catch (error) {
     if (error instanceof ConfigError) throw error;
@@ -97,15 +104,18 @@ export async function loadConfig(file = defaultConfigPath(), env = process.env) 
   if (mqtt.username_env) mqtt.username = requireEnv(mqtt.username_env);
   if (mqtt.password_env) mqtt.password = requireEnv(mqtt.password_env);
   if (mqtt.password_file) mqtt.password = (await readPrivateFile(path.resolve(path.dirname(file), mqtt.password_file), 8192)).replace(/\r?\n$/, '');
-  if (mqtt.ca_file) mqtt.ca = await readPrivateFile(path.resolve(path.dirname(file), mqtt.ca_file), 65536);
+  if (mqtt.ca_file) mqtt.ca = await readPrivateFile(path.resolve(path.dirname(file), mqtt.ca_file), MAX_CONFIG_BYTES);
   return { ...config, mqtt };
 }
 
 // Setup creates a new file exclusively. Updating existing user settings is deliberate/manual.
 export async function createConfig(file, data) {
   const parsed = parseConfig(data);
+  const serialized = `${JSON.stringify(parsed, null, 2)}\n`;
+  if (Buffer.byteLength(serialized, 'utf8') > MAX_CONFIG_BYTES)
+    throw new ConfigError('CONFIG_TOO_LARGE', `展开后的配置超过 ${MAX_CONFIG_BYTES} 字节上限；请减少设备或别名，未创建或覆盖文件。`);
   await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
-  try { await fs.writeFile(file, `${JSON.stringify(parsed, null, 2)}\n`, { flag: 'wx', mode: 0o600 }); }
+  try { await fs.writeFile(file, serialized, { flag: 'wx', mode: 0o600 }); }
   catch (error) {
     if (error.code === 'EEXIST') throw new ConfigError('CONFIG_EXISTS', '已有配置，未覆盖；请编辑现有配置或选择新路径。');
     throw new ConfigError('CONFIG_WRITE_FAILED', '无法创建本机配置。');
