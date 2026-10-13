@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "vico_home": {
+      "command": "node",
+      "args": ["./src/server.mjs"],
+      "cwd": "./",
+      "enabled": true,
+      "startup_timeout_sec": 30,
+      "tool_timeout_sec": 30
+    }
+  }
+}

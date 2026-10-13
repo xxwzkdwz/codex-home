@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "mqtt": { "url": "mqtt://127.0.0.1:1883", "base_topic": "zigbee2mqtt", "timeout_ms": 8000 },
+  "devices": [
+    { "device_id": "light.demo", "room_id": "demo_room", "name": "示例灯", "aliases": ["测试灯"], "kind": "light", "mqtt_topic": "demo-light", "capabilities": ["state"], "enabled": false, "require_availability": true }
+  ]
+}
