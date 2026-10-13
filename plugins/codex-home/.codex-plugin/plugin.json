@@ -1,6 +1,6 @@
 {
   "name": "codex-home",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Owner-controlled local Zigbee2MQTT light control for Codex.",
   "author": { "name": "Codex Home contributors" },
   "license": "MIT",

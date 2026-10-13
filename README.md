@@ -8,7 +8,9 @@
 
 **在 Codex 里说句话，控制你自己的智能灯。** 本地运行、明确登记设备、按你的指令操作。
 
-> v0.1.2：通过你自己的 **Zigbee2MQTT + MQTT 网关** 控制已登记灯具的开关。不是所有品牌通用的智能家居网关，也不是官方 OpenAI 插件。MIT 开源。
+> v0.1.3：通过你自己的 **Zigbee2MQTT + MQTT 网关** 控制已登记灯具的开关。不是所有品牌通用的智能家居网关，也不是官方 OpenAI 插件。MIT 开源。
+
+0.1.3 补丁：修正文档中的 `advanced.output` 配置字段，并让等价 MQTT 地址写法共用正在执行/结果未知的保护记录；不同网关和设备仍保持独立。未改变 MCP 会话断开处理，结束会话不能作为取消未完成控制请求的保证。关联读取协议的真灯验收仍未完成。
 
 [买什么设备](HARDWARE.md) · [安装和使用](#安装和使用) · [详细配置](plugins/codex-home/README.md) · [安全说明](SECURITY.md)
 
@@ -125,7 +127,7 @@ node src/cli.mjs status light.demo
 
 Zigbee2MQTT 的普通 `state` 可能来自缓存、乐观更新或群组推测；**只排除 retained 消息不能证明灯已执行**。0.1.2 默认 `state_confirmation: "unverified"`：`status` 仍通过 `/get` 读取网关回报，但不能据此清除未知结果锁；开关请求返回 `STATE_CONFIRMATION_REQUIRED` / `not_sent`，不会发控制命令。
 
-主人在维护时机核对**这一盏灯**：将 `'^codex_home_read_.*$'` 合并进已有 `filtered_cache` 数组，防止随机读取字段不断累积；保留 `optimistic: true`（默认），因为 Zigbee2MQTT 也通过该发布通道转发通用读取的实际结果，设 false 会导致读回超时。`filtered_attributes` / `filtered_optimistic` 不得过滤这些字段，`mqtt.output` 必须是 `json` 或 `attribute_and_json`。不覆盖原过滤规则，不全局关闭 `cache_state`，不删除状态文件、配对数据库或网络密钥。见 [Zigbee2MQTT 单设备选项](https://www.zigbee2mqtt.io/guide/configuration/devices-groups.html)及[单灯示例](docs/macos-gateway.md#reporting-zh)。插件不会替你修改网关。
+主人在维护时机核对**这一盏灯**：将 `'^codex_home_read_.*$'` 合并进已有 `filtered_cache` 数组，防止随机读取字段不断累积；保留 `optimistic: true`（默认），因为 Zigbee2MQTT 也通过该发布通道转发通用读取的实际结果，设 false 会导致读回超时。`filtered_attributes` / `filtered_optimistic` 不得过滤这些字段，`advanced.output` 必须是 `json` 或 `attribute_and_json`。不覆盖原过滤规则，不全局关闭 `cache_state`，不删除状态文件、配对数据库或网络密钥。见 [Zigbee2MQTT 单设备选项](https://www.zigbee2mqtt.io/guide/configuration/devices-groups.html)及[单灯示例](docs/macos-gateway.md#reporting-zh)。插件不会替你修改网关。
 
 核对后，在插件自己的该灯 JSON 登记中设 `state_confirmation: "correlated_read"`，**先运行只读 `node src/cli.mjs status light.demo` 预检**。这个模式通过 `/set` 包装固定的 ZCL **read**（只读 `genOnOff/onOff`，不是开关命令），为每次查询生成独立随机字段 `codex_home_read_<32hex>`；只有对应字段里的实际读取结果才可确认，普通 `state` 一概不能确认。MQTT ACL 需允许此固定读取使用的 `/set` topic。预检未得到关联读回时停止，不开灯、不退回旧版或只改标记绕过。安装/setup 仍不授权开关。
 
@@ -199,6 +201,8 @@ node scripts/check-package.mjs
 
 测试只使用合成设备/隔离 broker，不开关真实灯。端到端测试需要本机有 `mosquitto`；缺少时会明确 skip，CI 配置会安装它。请检查是否有 skip，不要把模拟测试当作真实灯控。
 
+2026-10-13 的 0.1.3 补丁验证：macOS 上 Node 22.23.2 / 26.5.0 各通过 **89 项运行测试 + 22 项安装器契约测试，0 fail、0 skip**。包含 14 项新增地址保护回归；32 文件发布检查与安装器 dry-run 通过。没有重装插件、修改私人配置或操作真实设备。此次本地验证不代表 GitHub CI 或现场验收已完成。
+
 2026-10-13 本地验证记录：0.1.2 在 macOS 上以 Node 22.23.2 / 26.5.0 各通过 **75 项运行测试 + 22 项安装器契约测试，0 fail、0 skip**。包含独立高端口 broker、模拟灯及真实 MCP stdio 集成；安装器测试使用隔离假 CLI，不是 22 次真实安装。32 文件发布检查、安装器 dry-run、两项技能校验和依赖审计通过（当次 0 已知漏洞）。CI 已加入安装器回归；这些本地结果不代表新版本的 GitHub CI 已执行。
 
 历史上 0.1.0 的原灯控逻辑已由使用者现场确认实际亮灭，协调器为 SONOFF Dongle-PMG24；0.1.1 改名包只做隔离回归。本次没有重装已有现场环境或再次操作真实灯。目录中的候选灯泡未逐一真机验收；Linux 的现场安装与硬件验收尚未完成，Windows 安装器尚未适配。
@@ -219,7 +223,9 @@ GitHub 源码可供别人克隆安装；这不等于进入 OpenAI 官方公共�
 
 **Control your own lights by asking Codex.** Codex Home runs locally, operates only on explicitly configured devices, and follows your instructions.
 
-> v0.1.2 controls individual allowlisted lights through **your own Zigbee2MQTT + MQTT gateway**. It is not a universal smart-home gateway or an official OpenAI plugin. MIT licensed.
+> v0.1.3 controls individual allowlisted lights through **your own Zigbee2MQTT + MQTT gateway**. It is not a universal smart-home gateway or an official OpenAI plugin. MIT licensed.
+
+0.1.3 patch: corrects the documented `advanced.output` setting and shares pending/unknown-outcome protection across equivalent MQTT URL spellings while keeping different brokers and devices independent. MCP session-disconnection handling is unchanged; ending a session does not guarantee cancellation of an unfinished control request. Real-light acceptance of the correlated-read protocol remains incomplete.
 
 [Hardware guide (Chinese)](HARDWARE.md) · [Installation](#installation-and-use) · [Detailed configuration](plugins/codex-home/README.md#english) · [Security](SECURITY.md) · [简体中文](#zh-cn)
 
@@ -355,7 +361,7 @@ Replace `light.demo` with your configured ID. `check` reads bridge availability,
 
 Zigbee2MQTT's ordinary `state` can come from cache, optimistic updates, or group inference. **Rejecting retained messages alone does not prove execution.** Version 0.1.2 defaults to `state_confirmation: "unverified"`: status uses `/get`, and reports do not clear unknown-outcome protection. Switching returns `STATE_CONFIRMATION_REQUIRED` / `not_sent` without sending a control command.
 
-During a maintenance window, the owner should merge `'^codex_home_read_.*$'` into **this light's** existing `filtered_cache` array to prevent dynamic read fields accumulating. Keep `optimistic: true` (the default): Zigbee2MQTT also publishes actual generic-read results through that channel; false causes the readback to time out. Neither `filtered_attributes` nor `filtered_optimistic` may filter those fields, and `mqtt.output` must be `json` or `attribute_and_json`. Preserve existing rules, do not disable global `cache_state`, and do not delete state files, pairing databases, or keys. See [upstream device options](https://www.zigbee2mqtt.io/guide/configuration/devices-groups.html) and the [single-light example](docs/macos-gateway.md#reporting-en). The plugin does not change the gateway for you.
+During a maintenance window, the owner should merge `'^codex_home_read_.*$'` into **this light's** existing `filtered_cache` array to prevent dynamic read fields accumulating. Keep `optimistic: true` (the default): Zigbee2MQTT also publishes actual generic-read results through that channel; false causes the readback to time out. Neither `filtered_attributes` nor `filtered_optimistic` may filter those fields, and `advanced.output` must be `json` or `attribute_and_json`. Preserve existing rules, do not disable global `cache_state`, and do not delete state files, pairing databases, or keys. See [upstream device options](https://www.zigbee2mqtt.io/guide/configuration/devices-groups.html) and the [single-light example](docs/macos-gateway.md#reporting-en). The plugin does not change the gateway for you.
 
 After checking, set `state_confirmation: "correlated_read"` in this light's **plugin JSON** and first run the read-only `node src/cli.mjs status light.demo` preflight. This mode wraps a fixed ZCL **read** of `genOnOff/onOff` in `/set`; it does not switch the light. Each query uses a new random `codex_home_read_<32hex>` field, and only the actual read result under that exact field can confirm state. Ordinary `state` never confirms it. MQTT ACLs must permit that fixed read on the `/set` topic. If the preflight does not receive the correlated reply, stop rather than switching, downgrading, or changing a flag to bypass it. Installation/setup still does not authorize control.
 
@@ -428,6 +434,8 @@ node scripts/check-package.mjs
 ```
 
 Automated tests use synthetic devices and an isolated broker, never real household lights. End-to-end tests require a local `mosquitto`; they explicitly skip if it is missing, and CI is configured to install it. Check for skipped tests rather than treating a simulated result as hardware acceptance.
+
+Local 0.1.3 patch validation on 2026-10-13: **89 runtime tests + 22 installer-contract tests passed with zero failures or skips** on macOS with each of Node 22.23.2 and 26.5.0, including 14 new URL-protection regressions. The 32-file package check and installer dry-run passed. No plugin was reinstalled, private configuration changed, or real device operated. These local checks do not establish GitHub CI completion or hardware acceptance.
 
 Local validation on 2026-10-13: version 0.1.2 passed **75 runtime tests + 22 installer-contract tests, with zero failures or skips**, on macOS with each of Node 22.23.2 and 26.5.0. This includes an isolated high-port broker, synthetic lights and real MCP stdio integration. Installer contracts use isolated fake CLIs, not 22 real installations. The 32-file package check, installer dry-run, both skill validators and dependency audit passed (zero known advisories at that check). CI now includes installer regression tests; local results do not mean the new GitHub CI has run.
 

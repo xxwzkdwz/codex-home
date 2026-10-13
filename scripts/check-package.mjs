@@ -4,7 +4,7 @@ import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const identity = Object.freeze({ name: 'codex-home', marketplace: 'codex-home-local', server: 'codex_home', displayName: 'Codex Home', version: '0.1.2', contributor: 'Codex Home contributors' });
+const identity = Object.freeze({ name: 'codex-home', marketplace: 'codex-home-local', server: 'codex_home', displayName: 'Codex Home', version: '0.1.3', contributor: 'Codex Home contributors' });
 const excludedDirectories = new Set(['.git', 'node_modules']);
 const forbiddenDirectories = new Set(['data', 'state', 'secrets', '.cache', 'coverage', 'dist']);
 const requiredFiles = [

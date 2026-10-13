@@ -182,7 +182,7 @@ test('isolated Mosquitto + fake Zigbee2MQTT + MCP stdio integration', { timeout:
 
   await t.test('initialize, tool annotations, and safe device listing', async () => {
     assert.equal(f.mcp.getServerVersion().name, 'codex-home');
-    assert.equal(f.mcp.getServerVersion().version, '0.1.2');
+    assert.equal(f.mcp.getServerVersion().version, '0.1.3');
     const { tools } = await f.mcp.listTools();
     assert.deepEqual(tools.map(tool => tool.name).sort(), ['home_health', 'home_list_devices', 'home_set_state', 'home_status']);
     for (const tool of tools) assert.equal(tool.annotations.readOnlyHint, tool.name !== 'home_set_state');

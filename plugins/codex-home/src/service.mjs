@@ -2,6 +2,17 @@ import { loadConfig, ConfigError } from './config.mjs';
 import { MqttTransport, HomeError } from './transport.mjs';
 
 const normalize = text => text.toLocaleLowerCase('en-US').replace(/\s/g, '');
+function deviceKey(config, device) {
+  const url = new URL(config.mqtt.url);
+  // Keep locks stable across root slashes, default ports, hostname case and
+  // IPv6 spellings. Do not resolve DNS aliases or rewrite the connection URL.
+  const port = url.port || (url.protocol === 'mqtts:' ? '8883' : '1883');
+  // MQTT's legacy parser handles explicit percent escapes differently from
+  // WHATWG URL. Keep those ambiguous inputs separate instead of merging hosts.
+  const broker = config.mqtt.url.includes('%') ? ['raw', config.mqtt.url]
+    : ['endpoint', url.protocol, url.hostname.toLowerCase(), port];
+  return JSON.stringify([...broker, config.mqtt.base_topic, device.mqtt_topic]);
+}
 function publicDevice(d) {
   return { device_id: d.device_id, room_id: d.room_id, name: d.name, aliases: d.aliases, kind: d.kind, capabilities: d.capabilities,
     state_confirmation: d.state_confirmation ?? 'unverified' };
@@ -43,7 +54,7 @@ export class HomeService {
     if (state && device.state_confirmation !== 'correlated_read') {
       throw new HomeError('STATE_CONFIRMATION_REQUIRED', '尚未配置该灯的关联设备读取；保持只读，请按 setup 准备并检查后再启用控制。');
     }
-    const key = `${config.mqtt.url}|${config.mqtt.base_topic}|${device.mqtt_topic}`;
+    const key = deviceKey(config, device);
     if (state && this.uncertain.has(key)) throw new HomeError('STATUS_REQUIRED', '上次控制结果不确定；请先读取新鲜状态，再按用户意图决定，不自动重放。', { outcome: 'unknown' });
     // Reject, do not queue: a delayed physical action can outlive the user's immediate intent.
     if (this.pending.has(key)) throw new ConfigError('DEVICE_BUSY', '该设备有未完成请求；先等待结果，不自动重试控制。');

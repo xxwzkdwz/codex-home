@@ -13,6 +13,121 @@ const make = devices => parseConfig({ version: 1, devices: devices ?? [lamp] });
 const confirmed = {
   state: 'ON', confirmation: 'correlated_device_read', state_freshness_verified: true, request_outcome: 'confirmed',
 };
+const atBroker = (url, { base_topic = 'zigbee2mqtt', mqtt_topic = lamp.mqtt_topic } = {}) => parseConfig({
+  version: 1, mqtt: { url, base_topic, allow_insecure_lan: true }, devices: [{ ...lamp, mqtt_topic }],
+});
+const equivalentBrokers = [
+  ['MQTT default port and root slash', ['mqtt://127.0.0.1:1883', 'mqtt://127.0.0.1:1883/', 'mqtt://127.0.0.1', 'mqtt://127.0.0.1:01883/']],
+  ['MQTTS default port and hostname case', ['mqtts://broker.example:8883', 'mqtts://broker.example/', 'MQTTS://BROKER.EXAMPLE:8883/']],
+  ['MQTT hostname case', ['mqtt://broker.example:1883', 'MQTT://BROKER.EXAMPLE/']],
+  ['IPv6 spelling', ['mqtt://[::1]:1883', 'mqtt://[0:0:0:0:0:0:0:1]/']],
+];
+
+for (const [label, urls] of equivalentBrokers) {
+  test(`unknown protection survives equivalent broker URLs: ${label}`, async () => {
+    let config = atBroker(urls[0]);
+    let writes = 0;
+    const seenUrls = [];
+    const service = new HomeService({ loader: async () => config, transport: {
+      setState: async current => {
+        seenUrls.push(current.mqtt.url);
+        if (++writes === 1) throw new HomeError('MQTT_TIMEOUT', 'Synthetic unknown write', { outcome: 'unknown' });
+        return confirmed;
+      },
+      status: async current => { seenUrls.push(current.mqtt.url); return confirmed; },
+    } });
+    await assert.rejects(service.setState('demo', 'ON'), { outcome: 'unknown' });
+    for (const url of urls) {
+      config = atBroker(url);
+      await assert.rejects(service.setState('demo', 'OFF'), { code: 'STATUS_REQUIRED', outcome: 'unknown' });
+    }
+    assert.equal(writes, 1);
+    await service.status('demo');
+    config = atBroker(urls[0]);
+    assert.equal((await service.setState('demo', 'OFF')).request_outcome, 'confirmed');
+    assert.equal(writes, 2);
+    assert.deepEqual(seenUrls, [urls[0], urls.at(-1), urls[0]], 'Canonical lock keys must not rewrite transport configuration.');
+  });
+
+  test(`pending protection survives equivalent broker URLs: ${label}`, async () => {
+    let config = atBroker(urls[0]);
+    let started, finish;
+    let writes = 0;
+    const entered = new Promise(resolve => { started = resolve; });
+    const service = new HomeService({ loader: async () => config, transport: {
+      setState: async () => {
+        if (++writes > 1) return confirmed;
+        started();
+        return new Promise(resolve => { finish = resolve; });
+      },
+      status: async () => confirmed,
+    } });
+    const first = service.setState('demo', 'ON');
+    await entered;
+    try {
+      for (const url of urls) {
+        config = atBroker(url);
+        await assert.rejects(service.setState('demo', 'OFF'), { code: 'DEVICE_BUSY' });
+        await assert.rejects(service.status('demo'), { code: 'DEVICE_BUSY' });
+      }
+      assert.equal(writes, 1);
+    } finally {
+      finish(confirmed);
+      await first;
+    }
+    assert.equal((await service.status('demo')).request_outcome, 'confirmed', 'Completion releases the canonical pending key.');
+  });
+}
+
+for (const [label, url, options] of [
+  ['hostname', 'mqtt://other.example:1883'],
+  ['port', 'mqtt://broker.example:1884'],
+  ['protocol even with the same explicit port', 'mqtts://broker.example:1883'],
+  ['base topic', 'mqtt://broker.example:1883', { base_topic: 'other-gateway' }],
+  ['device topic', 'mqtt://broker.example:1883', { mqtt_topic: 'other-lamp' }],
+]) {
+  test(`unknown protection remains independent for a different ${label}`, async () => {
+    const original = atBroker('mqtt://broker.example:1883');
+    let config = original;
+    let writes = 0;
+    const service = new HomeService({ loader: async () => config, transport: {
+      setState: async () => {
+        if (++writes === 1) throw new HomeError('MQTT_TIMEOUT', 'Synthetic unknown write', { outcome: 'unknown' });
+        return confirmed;
+      },
+      status: async () => confirmed,
+    } });
+    await assert.rejects(service.setState('demo', 'ON'), { outcome: 'unknown' });
+    config = atBroker(url, options);
+    assert.equal((await service.setState('demo', 'OFF')).request_outcome, 'confirmed');
+    await service.status('demo');
+    config = original;
+    await assert.rejects(service.setState('demo', 'OFF'), { code: 'STATUS_REQUIRED' });
+    assert.equal(writes, 2, 'Reading a different broker or topic must not clear the original protection.');
+  });
+}
+
+test('escaped hostnames do not share protection with WHATWG-equivalent Unicode hostnames', async () => {
+  // MQTT's legacy URL parser interprets an explicit percent sign differently
+  // from WHATWG URL. These accepted strings must not share a protection key.
+  const original = atBroker('mqtts://bücher.example');
+  let config = original;
+  let writes = 0;
+  const service = new HomeService({ loader: async () => config, transport: {
+    setState: async () => {
+      if (++writes === 1) throw new HomeError('MQTT_TIMEOUT', 'Synthetic unknown write', { outcome: 'unknown' });
+      return confirmed;
+    },
+    status: async () => confirmed,
+  } });
+  await assert.rejects(service.setState('demo', 'ON'), { outcome: 'unknown' });
+  config = atBroker('mqtts://b%C3%BCcher.example');
+  assert.equal((await service.setState('demo', 'OFF')).request_outcome, 'confirmed');
+  await service.status('demo');
+  config = original;
+  await assert.rejects(service.setState('demo', 'OFF'), { code: 'STATUS_REQUIRED' });
+  assert.equal(writes, 2);
+});
 
 test('an exact device ID wins over another enabled light name or alias', () => {
   const other = { ...lamp, device_id: 'light.other', mqtt_topic: 'other-lamp', name: 'light.demo', aliases: ['light.demo'] };
