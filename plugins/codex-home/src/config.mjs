@@ -38,10 +38,10 @@ export const configSchema = z.object({
 });
 
 export function defaultConfigPath(env = process.env) {
-  if (env.VICO_HOME_CONFIG) return path.resolve(env.VICO_HOME_CONFIG);
-  const base = process.platform === 'darwin' ? path.join(os.homedir(), 'Library', 'Application Support', 'VICO Home')
-    : process.platform === 'win32' ? path.join(env.APPDATA || os.homedir(), 'VICO Home')
-    : path.join(env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), 'vico-home');
+  if (env.CODEX_HOME_LIGHTS_CONFIG) return path.resolve(env.CODEX_HOME_LIGHTS_CONFIG);
+  const base = process.platform === 'darwin' ? path.join(os.homedir(), 'Library', 'Application Support', 'Codex Home')
+    : process.platform === 'win32' ? path.join(env.APPDATA || os.homedir(), 'Codex Home')
+    : path.join(env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), 'codex-home');
   return path.join(base, 'config.json');
 }
 
@@ -64,7 +64,7 @@ export async function readPrivateFile(file, maxBytes = 65536) {
     return buffer.subarray(0, length).toString('utf8');
   } catch (error) {
     if (error instanceof ConfigError) throw error;
-    if (error.code === 'ENOENT') throw new ConfigError('CONFIG_NOT_FOUND', '尚未配置 VICO Home；请先运行 setup。');
+    if (error.code === 'ENOENT') throw new ConfigError('CONFIG_NOT_FOUND', '尚未配置 Codex Home；请先运行 setup。');
     throw new ConfigError('CONFIG_UNREADABLE', '无法安全读取配置或凭据文件。');
   } finally { await handle?.close(); }
 }

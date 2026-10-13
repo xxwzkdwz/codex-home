@@ -1,8 +1,8 @@
 {
-  "name": "vico-home",
-  "version": "0.1.0",
-  "description": "Owner-controlled local Zigbee2MQTT light control for Codex, independent of VICO Core.",
-  "author": { "name": "VICO contributors" },
+  "name": "codex-home",
+  "version": "0.1.1",
+  "description": "Owner-controlled local Zigbee2MQTT light control for Codex.",
+  "author": { "name": "Codex Home contributors" },
   "license": "MIT",
   "keywords": ["codex", "smart-home", "zigbee2mqtt", "mqtt", "lights", "mcp"],
   "skills": "./skills/",
@@ -13,15 +13,15 @@
     }
   },
   "interface": {
-    "displayName": "VICO Home",
+    "displayName": "Codex Home",
     "shortDescription": "Control your own lights from Codex on your LAN.",
     "longDescription": "A local-only smart-home plugin. Configure your own supported devices and credentials outside the plugin; inspect device state and control explicitly authorized lights. Installing the plugin does not discover, configure, or control devices.",
-    "developerName": "VICO contributors",
+    "developerName": "Codex Home contributors",
     "category": "Productivity",
     "capabilities": ["Read", "Write"],
     "defaultPrompt": [
-      "Help me set up VICO Home with my own supported light.",
-      "List the lights I configured in VICO Home and check their status."
+      "Help me set up Codex Home with my own supported light.",
+      "List the lights I configured in Codex Home and check their status."
     ]
   }
 }

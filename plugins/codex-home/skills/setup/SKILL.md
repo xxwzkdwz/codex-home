@@ -1,15 +1,15 @@
 ---
 name: setup
-description: Set up or diagnose the standalone VICO Home Codex plugin with an existing Zigbee2MQTT gateway and a private light allowlist. Use for installation, local MQTT connection setup, importing an explicitly selected VICO registry, or gateway-offline diagnosis.
+description: Set up or diagnose Codex Home with an existing Zigbee2MQTT gateway and a private light allowlist. Use for installation, local MQTT connection setup, importing an explicitly selected device registry, or gateway-offline diagnosis.
 ---
 
-# Set up VICO Home
+# Set up Codex Home
 
 Resolve the plugin root two directories above this skill. Read `../../README.md` for platform-specific paths and supported configuration fields. This is a local desktop/CLI integration, not a hosted universal smart-home service.
 
-1. Inspect the current installation and available tools. VICO Home needs Node.js 22+ and an existing reachable Mosquitto-compatible MQTT broker plus Zigbee2MQTT and paired lights. It does not require VICO Core or another model subscription. Do not install/reset a Zigbee network just because the plugin is unconfigured.
+1. Inspect the current installation and available tools. Codex Home needs Node.js 22+ and an existing reachable Mosquitto-compatible MQTT broker plus Zigbee2MQTT and paired lights. It does not require a separate home-control application or model API key. Do not install/reset a Zigbee network just because the plugin is unconfigured.
 2. If runtime dependencies are missing in the installed copy, run `npm ci --omit=dev --ignore-scripts --no-audit --no-fund` in that plugin root. Do not substitute an old checkout's path.
-3. Use `node src/cli.mjs init` from the plugin root to create a private empty configuration without overwriting an existing file. To reuse VICO's device registry, require an explicitly selected local file and run `node src/cli.mjs import-vico <absolute-devices.json-path>`. This copies the device allowlist into separate local settings; it does not read or copy Zigbee keys or alter VICO. An existing destination is never overwritten.
+3. Use `node src/cli.mjs init` from the plugin root to create a private empty configuration without overwriting an existing file. Alternatively, to reuse a device registry, use the owner's explicitly selected local file and run `node src/cli.mjs import-registry <absolute-devices.json-path>`. The registry must contain only `version: 1` and a `devices` array matching the documented light schema. This copies the device allowlist into separate local settings; it does not read or copy Zigbee keys or modify the source registry. An existing destination is never overwritten: choose import instead of init, or explicitly select a new destination with `--config`.
 4. Guide the owner to edit their private configuration with their broker and exact light topics. Use `examples/config.example.json` only as a synthetic reference; its device is disabled. Do not paste real config or credentials into chat. Passwords are supplied by owner-controlled environment variables or a separate owner-only file. Never ask for passwords, network keys or backups in conversation. Keep broker TLS verification enabled.
 5. Run `node src/cli.mjs check` (read-only) or use `home_health`. A healthy broker/bridge does not prove device control. Use `home_list_devices`; a `home_status` read is appropriate within the owner's setup or connectivity-check request and needs no separate permission. A real ON/OFF test requires the user to authorize that light action and any intended restoration; setup alone is not permission to flash the home lights.
 

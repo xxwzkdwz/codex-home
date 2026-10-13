@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { HomeService, safeError } from './service.mjs';
 
 const service = new HomeService();
-const server = new McpServer({ name: 'vico-home', version: '0.1.0' });
+const server = new McpServer({ name: 'codex-home', version: '0.1.1' });
 const read = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true };
 const result = action => async (args, extra) => {
   try {

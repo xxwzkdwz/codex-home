@@ -16,13 +16,13 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
           cache: npm
-          cache-dependency-path: plugins/vico-home/package-lock.json
+          cache-dependency-path: plugins/codex-home/package-lock.json
       - run: npm ci --omit=dev --ignore-scripts --no-audit --no-fund
-        working-directory: plugins/vico-home
+        working-directory: plugins/codex-home
       - name: Install isolated-broker test dependency
         run: |
           sudo apt-get update
           sudo apt-get install --yes mosquitto
       - run: npm test
-        working-directory: plugins/vico-home
+        working-directory: plugins/codex-home
       - run: node scripts/check-package.mjs

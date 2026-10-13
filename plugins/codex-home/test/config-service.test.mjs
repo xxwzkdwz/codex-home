@@ -9,7 +9,7 @@ import { HomeError } from '../src/transport.mjs';
 
 const lamp = { device_id: 'light.demo', room_id: 'demo_room', name: 'Demo light', aliases: ['demo'], kind: 'light', mqtt_topic: 'demo-light' };
 const make = (overrides = {}) => parseConfig({ version: 1, mqtt: {}, devices: [lamp], ...overrides });
-const fixture = async t => { const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'vico-home-test-')); t.after(() => fs.rm(dir, { recursive: true, force: true })); return path.join(dir, 'config.json'); };
+const fixture = async t => { const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-home-test-')); t.after(() => fs.rm(dir, { recursive: true, force: true })); return path.join(dir, 'config.json'); };
 
 test('safe defaults, literal lights and unique IDs/topics', () => {
   const config = make();

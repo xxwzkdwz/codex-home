@@ -14,7 +14,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 
 const pluginRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const topic = 'integration/light-not-a-real-device';
-const base = `vico-integration-${randomUUID()}`;
+const base = `codex-home-integration-${randomUUID()}`;
 
 async function findMosquitto() {
   const candidates = ['/opt/homebrew/sbin/mosquitto', ...(process.env.PATH || '').split(path.delimiter).filter(Boolean).map(dir => path.join(dir, 'mosquitto'))];
@@ -64,7 +64,7 @@ async function stopProcess(child) {
 }
 
 async function fixture(t, executable) {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'vico-home-isolated-integration-'));
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-home-isolated-integration-'));
   let broker;
   let fake;
   let mcp;
@@ -102,7 +102,7 @@ async function fixture(t, executable) {
   let currentState = 'OFF';
   let fakeError;
   fake = await mqtt.connectAsync(url, {
-    clientId: `vico-home-fake-${randomUUID()}`, clean: true, reconnectPeriod: 0,
+    clientId: `codex-home-fake-${randomUUID()}`, clean: true, reconnectPeriod: 0,
     queueQoSZero: false, connectTimeout: 3000,
   });
   fake.on('error', error => { fakeError = error; });
@@ -129,11 +129,11 @@ async function fixture(t, executable) {
 
   transport = new StdioClientTransport({
     command: process.execPath, args: [path.join(pluginRoot, 'src/server.mjs')], cwd: pluginRoot,
-    env: { VICO_HOME_CONFIG: configPath }, stderr: 'pipe',
+    env: { CODEX_HOME_LIGHTS_CONFIG: configPath }, stderr: 'pipe',
   });
   let serverStderr = '';
   transport.stderr?.on('data', chunk => { serverStderr += chunk.toString(); });
-  mcp = new Client({ name: 'vico-home-isolated-integration', version: '1.0.0' });
+  mcp = new Client({ name: 'codex-home-isolated-integration', version: '1.0.0' });
   await mcp.connect(transport);
 
   const publish = (suffix, body, retain = true) => fake.publishAsync(`${base}/${suffix}`, typeof body === 'string' ? body : JSON.stringify(body), { qos: 1, retain });
@@ -162,7 +162,8 @@ test('isolated Mosquitto + fake Zigbee2MQTT + MCP stdio integration', { timeout:
   const args = state => ({ device_ref: 'test-lamp', state });
 
   await t.test('initialize, tool annotations, and safe device listing', async () => {
-    assert.equal(f.mcp.getServerVersion().name, 'vico-home');
+    assert.equal(f.mcp.getServerVersion().name, 'codex-home');
+    assert.equal(f.mcp.getServerVersion().version, '0.1.1');
     const { tools } = await f.mcp.listTools();
     assert.deepEqual(tools.map(tool => tool.name).sort(), ['home_health', 'home_list_devices', 'home_set_state', 'home_status']);
     for (const tool of tools) assert.equal(tool.annotations.readOnlyHint, tool.name !== 'home_set_state');

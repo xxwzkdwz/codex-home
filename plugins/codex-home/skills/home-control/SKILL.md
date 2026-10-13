@@ -1,11 +1,11 @@
 ---
 name: home-control
-description: Control owner-configured Zigbee2MQTT lights from Codex using VICO Home. Use for listing home lights, reading switch states, and explicitly requested ON/OFF actions. Does not operate phones, locks, heaters, cameras, or arbitrary MQTT services.
+description: Control owner-configured Zigbee2MQTT lights from Codex using Codex Home. Use for listing home lights, reading switch states, and explicitly requested ON/OFF actions. Does not operate phones, locks, heaters, cameras, or arbitrary MQTT services.
 ---
 
 # Home light control
 
-Use the installed VICO Home MCP tools. No VICO app, VICO Core, or separate model API key is needed. The local MCP server connects to the owner's existing MQTT/Zigbee2MQTT gateway; it does not create that gateway.
+Use the installed Codex Home MCP tools. No separate home-control application or model API key is needed. The local MCP server connects to the owner's existing MQTT/Zigbee2MQTT gateway; it does not create that gateway.
 
 - Start with `home_list_devices` to obtain the configured stable IDs. Names and aliases must match exactly after whitespace/case normalization; if ambiguous, ask which light. Never guess an internal MQTT topic or supply arbitrary broker addresses.
 - Use `home_health` for setup or connectivity diagnosis, and `home_status` for a current device state. Health reports only gateway availability, not whether a light can be controlled. Missing configuration routes to the bundled `setup` skill.

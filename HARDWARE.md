@@ -1,10 +1,10 @@
 # 买什么设备，才能用 Codex 控制灯？
 
-资料核对日期：2026-10-13。适用于 VICO Home v0.1.0。
+资料核对日期：2026-10-13。适用于 Codex Home v0.1.1。
 
-**最小入门组合：已有电脑 + 1 个 Zigbee USB 协调器 + 1 只兼容 Zigbee 灯泡 + 合适的成品台灯。** 先验证一盏灯，不需要一开始改造全屋，也不需要购买 VICO 主程序。
+**最小入门组合：已有电脑 + 1 个 Zigbee USB 协调器 + 1 只兼容 Zigbee 灯泡 + 合适的成品台灯。** 先验证一盏灯，不需要一开始改造全屋。
 
-本项目实际安装与灯控验收平台是 **macOS**。安装脚本面向 macOS/Linux，Linux 现场安装与硬件尚未验收；Windows 安装器尚未适配，不要把 Zigbee2MQTT 自身支持 Windows 理解成本插件也已支持完整 Windows 安装。
+原灯控逻辑的实际安装与现场 ON/OFF 验收平台是 **macOS**；0.1.1 改名包只做隔离回归，不为发布重新控制真实灯或重装已有环境。安装脚本面向 macOS/Linux，Linux 现场安装与硬件尚未验收；Windows 安装器尚未适配，不要把 Zigbee2MQTT 自身支持 Windows 理解成本插件也已支持完整 Windows 安装。
 
 本插件只接入你自己的 **Zigbee2MQTT + MQTT**，目前支持查状态、开灯和关灯。即使灯泡本身支持调光、色温或彩色，本版也只使用 `ON/OFF`。不直接支持 Wi-Fi 灯、蓝牙灯、Matter/Thread 灯或厂商私有网关；包装上只写“智能”“支持某语音助手”，不代表兼容。
 
@@ -55,7 +55,7 @@ LED2201G8 的[厂商说明书](https://www.ikea.com/rs/sr/manuals/tradfri-led-si
 1. 先按[Zigbee2MQTT 官方入门](https://www.zigbee2mqtt.io/guide/getting-started/)建立自己的 MQTT 和 Zigbee2MQTT 服务，确认协调器在线；本插件不是这些服务的替代品。
 2. 将第一只灯泡装进匹配的成品灯具，按该**精确型号**的说明配对到自己的 Zigbee2MQTT。只在明确配对时开放加入，完成后关闭；不要重置已经工作的其他设备。
 3. 先在 Zigbee2MQTT 中验证这一盏灯能读取状态，并在你允许时完成一次开关测试。插件默认还要求设备 availability；按[官方 availability 说明](https://www.zigbee2mqtt.io/guide/configuration/device-availability.html)为该设备启用，而不是为消除错误就跳过在线检查。
-4. 回到 [安装说明](README.md)安装 VICO Home，按[本机配置说明](plugins/vico-home/README.md)把**自己的**网关和灯加入白名单。不要上传配置、网络密钥、日志或协调器备份到 GitHub。
+4. 回到 [安装说明](README.md)安装 Codex Home，按[本机配置说明](plugins/codex-home/README.md)把**自己的**网关和灯加入白名单。不要上传配置、网络密钥、日志或协调器备份到 GitHub。
 5. 在 Codex 先说“检查家庭网关”“列出已配置的灯”“查询示例灯状态”。确认目标后，再明确要求“打开示例灯”；把“示例灯”替换为你自己设置的唯一名称。
 
 出现 `unknown` 只代表请求结果尚未确认，不代表一定没执行。先查状态，不让助手反复开关。工具确认的是网关的新鲜状态回报，不能代替人在现场确认灯确实亮了或灭了。

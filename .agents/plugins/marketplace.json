@@ -1,14 +1,14 @@
 {
-  "name": "vico-home-local",
+  "name": "codex-home-local",
   "interface": {
-    "displayName": "VICO Home"
+    "displayName": "Codex Home"
   },
   "plugins": [
     {
-      "name": "vico-home",
+      "name": "codex-home",
       "source": {
         "source": "local",
-        "path": "./plugins/vico-home"
+        "path": "./plugins/codex-home"
       },
       "policy": {
         "installation": "AVAILABLE",
